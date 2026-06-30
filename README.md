@@ -15,12 +15,14 @@ idiomatic ASP.NET Core, tests, and small vertical slices.
 
 - .NET SDK 10.0.x
 
-This workspace currently uses `/home/welkin/.dotnet/dotnet`. If `dotnet` is not
-on your PATH yet, run commands with:
+On Arch Linux, install the SDK and ASP.NET Core runtime from the official repos:
 
 ```sh
-export PATH="$HOME/.dotnet:$PATH"
+sudo pacman -S --needed dotnet-sdk aspnet-runtime aspnet-targeting-pack
 ```
+
+Pacman installs `dotnet` at `/usr/bin/dotnet`, which should already be on your
+PATH.
 
 ## Run locally
 
