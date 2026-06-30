@@ -9,6 +9,7 @@ idiomatic ASP.NET Core, tests, and small vertical slices.
 - ASP.NET Core API project under `src/NotifyRail.Api`
 - xUnit test project under `tests/NotifyRail.Api.Tests`
 - `GET /healthz` liveness endpoint
+- `GET /readyz` PostgreSQL readiness endpoint
 - GitHub Actions workflow for restore, build, and test
 
 ## Requirements
@@ -34,7 +35,12 @@ Then check the service:
 
 ```sh
 curl http://localhost:5000/healthz
+curl http://localhost:5000/readyz
 ```
+
+`/readyz` reads `ConnectionStrings:Postgres` from configuration and checks the
+database with `SELECT 1`. The development connection string expects a local
+PostgreSQL database named `notifyrail` with user/password `notifyrail`.
 
 ## Test
 
@@ -46,7 +52,6 @@ dotnet test
 
 The first learning slices should stay small:
 
-1. Add `/readyz` with configuration-driven PostgreSQL connectivity.
-2. Add message creation request/response models.
-3. Persist messages and deliveries transactionally.
-4. Add delivery claiming and worker processing.
+1. Add message creation request/response models.
+2. Persist messages and deliveries transactionally.
+3. Add delivery claiming and worker processing.
