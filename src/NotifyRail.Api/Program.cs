@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
 using NotifyRail.Api.Features.Health;
+using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,6 +18,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
 var app = builder.Build();
 
 app.MapHealthEndpoints();
+app.MapCreateMessageEndpoint();
 
 app.Run();
 
