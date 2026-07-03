@@ -1,6 +1,6 @@
 namespace NotifyRail.Api.Features.Messages.CreateMessage;
 
-public static class CreateMessageRequestNormalizer
+internal static class CreateMessageRequestNormalizer
 {
     public static CreateMessageNormalizationResult Normalize(CreateMessageRequest request)
     {

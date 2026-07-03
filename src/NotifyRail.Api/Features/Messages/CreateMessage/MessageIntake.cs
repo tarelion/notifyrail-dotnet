@@ -17,7 +17,7 @@ public sealed class MessageIntake
         _dbContext = dbContext;
     }
 
-    public async Task<CreateMessageResult> CreateAsync(
+    public async Task<CreateMessageOutcome> CreateAsync(
         CreateMessageCommand command,
         CancellationToken cancellationToken)
     {
@@ -57,7 +57,7 @@ public sealed class MessageIntake
             return await ReplayExistingMessageAsync(command, cancellationToken);
         }
 
-        return CreateMessageResult.Success(new CreateMessageResponse(
+        return CreateMessageOutcome.Accepted(new CreateMessageResponse(
             message.Id,
             deliveries.Length,
             message.CreatedAt));
@@ -70,7 +70,7 @@ public sealed class MessageIntake
             && postgresException.ConstraintName == IdempotencyKeyUniqueConstraint;
     }
 
-    private async Task<CreateMessageResult> ReplayExistingMessageAsync(
+    private async Task<CreateMessageOutcome> ReplayExistingMessageAsync(
         CreateMessageCommand command,
         CancellationToken cancellationToken)
     {
@@ -95,11 +95,11 @@ public sealed class MessageIntake
 
         if (!MessageMatchesCommand(existingMessage, existingRecipients, command))
         {
-            return CreateMessageResult.ConflictResult(
+            return CreateMessageOutcome.IdempotencyConflict(
                 "idempotency key is already used with different content");
         }
 
-        return CreateMessageResult.Success(new CreateMessageResponse(
+        return CreateMessageOutcome.Accepted(new CreateMessageResponse(
             existingMessage.Id,
             existingRecipients.Length,
             existingMessage.CreatedAt));

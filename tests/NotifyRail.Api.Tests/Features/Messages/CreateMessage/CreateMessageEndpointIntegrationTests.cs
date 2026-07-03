@@ -52,6 +52,79 @@ public sealed class CreateMessageEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task CreateMessage_ReplaysSameResponse_WhenRequestMatchesAfterNormalization()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = _factory.CreateClient();
+        var idempotencyKey = $"normalized-{Guid.NewGuid()}";
+        var request = ValidRequest($" {idempotencyKey} ") with
+        {
+            SenderTitle = " NotifyRail ",
+            Recipients = [" +905551111111 ", "+905552222222 "],
+            ReportLabel = " Shipping Updates ",
+        };
+
+        using var firstResponse = await client.PostAsJsonAsync("/messages", request);
+        using var secondResponse = await client.PostAsJsonAsync(
+            "/messages",
+            ValidRequest(idempotencyKey) with
+            {
+                ReportLabel = "Shipping Updates",
+            });
+
+        Assert.Equal(HttpStatusCode.Accepted, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, secondResponse.StatusCode);
+
+        var firstReceipt = await firstResponse.Content.ReadFromJsonAsync<CreateMessageResponse>();
+        var secondReceipt = await secondResponse.Content.ReadFromJsonAsync<CreateMessageResponse>();
+
+        Assert.NotNull(firstReceipt);
+        Assert.NotNull(secondReceipt);
+        Assert.Equal(firstReceipt.MessageId, secondReceipt.MessageId);
+        Assert.Equal(firstReceipt.DeliveryCount, secondReceipt.DeliveryCount);
+        Assert.Equal(firstReceipt.CreatedAt, secondReceipt.CreatedAt);
+    }
+
+    [Fact]
+    public async Task CreateMessage_ReturnsBadRequest_WhenDuplicateRecipientsMatchAfterTrim()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = _factory.CreateClient();
+        var request = ValidRequest($"invalid-duplicate-{Guid.NewGuid()}") with
+        {
+            Recipients = [" +905551111111 ", "+905551111111"],
+        };
+
+        using var response = await client.PostAsJsonAsync("/messages", request);
+        var error = await response.Content.ReadFromJsonAsync<CreateMessageErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(error);
+        Assert.Equal("recipient +905551111111 must not be repeated", error.Error);
+    }
+
+    [Fact]
+    public async Task CreateMessage_ReturnsBadRequest_WhenMessageTypeIsInvalid()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = _factory.CreateClient();
+        var request = ValidRequest($"invalid-type-{Guid.NewGuid()}") with
+        {
+            Type = "email",
+        };
+
+        using var response = await client.PostAsJsonAsync("/messages", request);
+        var error = await response.Content.ReadFromJsonAsync<CreateMessageErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(error);
+        Assert.Equal("type must be one of: otp, transactional, campaign", error.Error);
+    }
+
+    [Fact]
     public async Task CreateMessage_RollsBackPartialWrite_WhenDeliveryInsertFails()
     {
         await EnsureDatabaseReadyAsync();

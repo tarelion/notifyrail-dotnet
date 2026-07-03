@@ -25,14 +25,17 @@ public static class CreateMessageEndpoint
         }
 
         var command = normalization.Command!;
-        var result = await messageIntake.CreateAsync(command, cancellationToken);
-        if (!result.IsSuccess)
-        {
-            return Results.Conflict(new CreateMessageErrorResponse(result.Conflict!));
-        }
+        var outcome = await messageIntake.CreateAsync(command, cancellationToken);
 
-        return Results.Accepted(
-            $"/messages/{result.Response!.MessageId}",
-            result.Response);
+        return outcome.Kind switch
+        {
+            CreateMessageOutcomeKind.Accepted => Results.Accepted(
+                $"/messages/{outcome.Response!.MessageId}",
+                outcome.Response),
+            CreateMessageOutcomeKind.IdempotencyConflict => Results.Conflict(
+                new CreateMessageErrorResponse(outcome.Error!)),
+            _ => throw new InvalidOperationException(
+                $"Unknown create-message outcome: {outcome.Kind}"),
+        };
     }
 }

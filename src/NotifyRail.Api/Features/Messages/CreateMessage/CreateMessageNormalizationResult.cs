@@ -1,6 +1,6 @@
 namespace NotifyRail.Api.Features.Messages.CreateMessage;
 
-public sealed class CreateMessageNormalizationResult
+internal sealed class CreateMessageNormalizationResult
 {
     private CreateMessageNormalizationResult(CreateMessageCommand? command, string? error)
     {
