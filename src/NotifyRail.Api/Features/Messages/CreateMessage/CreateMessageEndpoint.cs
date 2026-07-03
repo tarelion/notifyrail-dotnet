@@ -45,10 +45,14 @@ public static class CreateMessageEndpoint
             .Select(recipient => Delivery.Create(message.Id, recipient, createdAt))
             .ToArray();
 
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
         dbContext.Messages.Add(message);
         dbContext.Deliveries.AddRange(deliveries);
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         var response = new CreateMessageResponse(
             message.Id,

@@ -60,6 +60,9 @@ public sealed class MessageConfiguration : IEntityTypeConfiguration<Message>
             .HasColumnType("text")
             .IsRequired();
 
+        // MVP scope: idempotency keys are globally unique because client identity
+        // does not exist yet. Replace this with a client-scoped unique index when
+        // clients/API keys are introduced.
         builder.HasIndex(message => message.IdempotencyKey)
             .IsUnique()
             .HasDatabaseName("messages_idempotency_key_key");
