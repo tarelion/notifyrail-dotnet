@@ -10,7 +10,8 @@ public static class CreateMessageEndpoint
     {
         endpoints.MapPost("/messages", CreateAsync)
             .WithName("CreateMessage")
-            .Produces<CreateMessageResponse>(StatusCodes.Status202Accepted);
+            .Produces<CreateMessageResponse>(StatusCodes.Status202Accepted)
+            .Produces<CreateMessageErrorResponse>(StatusCodes.Status400BadRequest);
 
         return endpoints;
     }
@@ -20,20 +21,27 @@ public static class CreateMessageEndpoint
         NotifyRailDbContext dbContext,
         CancellationToken cancellationToken)
     {
+        var normalization = CreateMessageRequestNormalizer.Normalize(request);
+        if (!normalization.IsSuccess)
+        {
+            return Results.BadRequest(new CreateMessageErrorResponse(normalization.Error!));
+        }
+
+        var command = normalization.Command!;
         var createdAt = DateTimeOffset.UtcNow;
 
         var message = Message.Create(
-            request.Type,
-            request.Channel,
-            request.SenderTitle,
-            request.Body,
-            request.IdempotencyKey,
+            command.Type,
+            command.Channel,
+            command.SenderTitle,
+            command.Body,
+            command.IdempotencyKey,
             createdAt,
-            request.ScheduledAt,
-            request.ReportLabel,
-            request.Encoding);
+            command.ScheduledAt,
+            command.ReportLabel,
+            command.Encoding);
 
-        var deliveries = request.Recipients
+        var deliveries = command.Recipients
             .Select(recipient => Delivery.Create(message.Id, recipient, createdAt))
             .ToArray();
 
