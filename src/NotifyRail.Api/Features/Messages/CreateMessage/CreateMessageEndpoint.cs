@@ -33,7 +33,7 @@ public static class CreateMessageEndpoint
         }
 
         var command = normalization.Command!;
-        var createdAt = DateTimeOffset.UtcNow;
+        var createdAt = TruncateToMicrosecond(DateTimeOffset.UtcNow);
 
         var message = Message.Create(
             command.Type,
