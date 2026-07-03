@@ -13,6 +13,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
 {
     builder.Services.AddDbContext<NotifyRailDbContext>(options =>
         options.UseNpgsql(postgresConnectionString));
+    builder.Services.AddScoped<MessageIntake>();
 }
 
 var app = builder.Build();
