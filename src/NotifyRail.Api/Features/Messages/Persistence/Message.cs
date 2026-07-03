@@ -6,6 +6,33 @@ public sealed class Message
     {
     }
 
+    public static Message Create(
+        string type,
+        string channel,
+        string senderTitle,
+        string body,
+        string idempotencyKey,
+        DateTimeOffset createdAt,
+        DateTimeOffset? scheduledAt = null,
+        string? reportLabel = null,
+        string? encoding = null)
+    {
+        return new Message
+        {
+            Id = Guid.NewGuid(),
+            Type = type,
+            Channel = channel,
+            SenderTitle = senderTitle,
+            Body = body,
+            IdempotencyKey = idempotencyKey,
+            ScheduledAt = scheduledAt,
+            ReportLabel = reportLabel,
+            Encoding = encoding,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+        };
+    }
+
     public Guid Id { get; private set; }
 
     public string Type { get; private set; } = null!;

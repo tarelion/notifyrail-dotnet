@@ -8,6 +8,23 @@ public sealed class Delivery
     {
     }
 
+    public static Delivery Create(
+        Guid messageId,
+        string recipient,
+        DateTimeOffset createdAt)
+    {
+        return new Delivery
+        {
+            Id = Guid.NewGuid(),
+            MessageId = messageId,
+            Recipient = recipient,
+            Status = "queued",
+            AttemptCount = 0,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+        };
+    }
+
     public Guid Id { get; private set; }
 
     public Guid MessageId { get; private set; }
