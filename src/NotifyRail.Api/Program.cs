@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
+using NotifyRail.Api.Features.Deliveries.Providers;
 using NotifyRail.Api.Features.Deliveries.Queue;
+using NotifyRail.Api.Features.Deliveries.Worker;
 using NotifyRail.Api.Features.Health;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Infrastructure.Persistence;
@@ -14,7 +16,12 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
 {
     builder.Services.AddDbContext<NotifyRailDbContext>(options =>
         options.UseNpgsql(postgresConnectionString));
+    builder.Services.Configure<DeliveryWorkerOptions>(
+        builder.Configuration.GetSection(DeliveryWorkerOptions.SectionName));
+    builder.Services.AddSingleton(TimeProvider.System);
+    builder.Services.AddSingleton<IProviderSender, MockProvider>();
     builder.Services.AddScoped<DeliveryQueue>();
+    builder.Services.AddScoped<DeliveryWorker>();
     builder.Services.AddScoped<MessageIntake>();
 }
 
