@@ -12,7 +12,9 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 - Message endpoint: `src/NotifyRail.Api/Features/Messages/CreateMessage`
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
 
-Responses produced by the registered handlers use JSON payloads.
+Responses explicitly produced by the registered handlers use JSON payloads.
+Unhandled failures are delegated to ASP.NET Core and do not currently have an
+application-level JSON contract.
 
 ## `GET /healthz`
 
@@ -63,6 +65,7 @@ must not include unknown fields.
 ### Success Response
 
 - Status: `202 Accepted`
+- Header: `Location: /messages/{message_id}`
 
 ```json
 {
@@ -91,17 +94,17 @@ and this contract must change together before idempotency becomes client-scoped.
 
 ### Error Responses
 
-Errors use this shape:
+Validation and idempotency errors use this shape:
 
 ```json
 {"error":"description"}
 ```
 
-| Status | Condition |
-| --- | --- |
-| `400 Bad Request` | Invalid JSON body or invalid normalized input. |
-| `409 Conflict` | The idempotency key already belongs to a different normalized request. |
-| `500 Internal Server Error` | Message creation could not complete because of an internal or persistence error. |
+| Status | Body contract | Condition |
+| --- | --- | --- |
+| `400 Bad Request` | `{"error":"description"}` | Invalid JSON body or invalid normalized input. |
+| `409 Conflict` | `{"error":"description"}` | The idempotency key already belongs to a different normalized request. |
+| `500 Internal Server Error` | No application-level contract. | An unexpected internal or persistence failure escaped the handler. ASP.NET Core produces the response. |
 
 ### Example Request
 

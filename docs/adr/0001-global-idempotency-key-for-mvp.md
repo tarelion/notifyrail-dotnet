@@ -1,5 +1,30 @@
 # Global idempotency key for the MVP
 
-NotifyRail currently treats `messages.idempotency_key` as globally unique because the MVP has no client, tenant, account, or API key identity yet. This is a deliberate simplification so message creation can still prevent duplicate retries before authentication and client ownership exist.
+## Status
 
-When client identity is introduced, idempotency must become client-scoped by storing the client identity on messages and replacing the global uniqueness rule with a unique constraint over `(client_id, idempotency_key)`.
+Accepted.
+
+## Context
+
+The MVP has no client, tenant, account, or API-key identity. Idempotency still
+needs a stable scope so retrying message creation cannot create duplicate
+messages and deliveries.
+
+## Decision
+
+Treat `messages.idempotency_key` as globally unique for the MVP. A replay with
+the same normalized content returns the original receipt; reuse with different
+content is an idempotency conflict.
+
+Enforce the scope in PostgreSQL with a unique constraint on
+`messages.idempotency_key`, rather than relying only on application checks.
+
+## Consequences
+
+- Two otherwise unrelated callers cannot reuse the same idempotency key.
+- Concurrent requests are resolved by the database uniqueness constraint.
+- Introducing client identity requires storing that identity on messages and
+  replacing the global constraint with a unique constraint over
+  `(client_id, idempotency_key)`.
+- The database constraint and the HTTP idempotency contract must change in the
+  same migration.

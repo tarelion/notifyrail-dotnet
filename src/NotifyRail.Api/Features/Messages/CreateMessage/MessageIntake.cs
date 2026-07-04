@@ -44,6 +44,8 @@ public sealed class MessageIntake
         _dbContext.Messages.Add(message);
         _dbContext.Deliveries.AddRange(deliveries);
 
+        // The database constraint arbitrates concurrent requests with the same
+        // idempotency key. The loser rolls back and replays the committed winner.
         try
         {
             await _dbContext.SaveChangesAsync(cancellationToken);
@@ -52,6 +54,9 @@ public sealed class MessageIntake
         catch (DbUpdateException exception) when (IsIdempotencyKeyConflict(exception))
         {
             await transaction.RollbackAsync(cancellationToken);
+
+            // Detach the rejected message and delivery graph before querying the
+            // committed winner through this DbContext.
             _dbContext.ChangeTracker.Clear();
 
             return await ReplayExistingMessageAsync(command, cancellationToken);
@@ -139,6 +144,9 @@ public sealed class MessageIntake
 
     private static DateTimeOffset TruncateToMicrosecond(DateTimeOffset value)
     {
+        // PostgreSQL timestamptz stores microseconds, while DateTimeOffset stores
+        // 100-nanosecond ticks. Normalize precision before persistence and replay
+        // comparison so the same instant does not produce an idempotency conflict.
         var utcValue = value.ToUniversalTime();
         var ticks = utcValue.Ticks - utcValue.Ticks % 10;
 

@@ -38,9 +38,14 @@ public sealed class DeliveryQueue
 
         workerId = workerId.Trim();
 
+        // Recovery, expiry, and claiming share one transaction so workers cannot
+        // observe or act on partially transitioned deliveries.
         await using var transaction =
             await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
+        // A worker can stop after claiming a delivery but before recording the
+        // provider result. Reusing the current attempt number lets a replacement
+        // worker safely repeat that attempt with the same provider idempotency key.
         var staleBefore = claimTime.Subtract(StaleClaimTimeout);
         await _dbContext.Database.ExecuteSqlInterpolatedAsync(
             $"""
@@ -62,6 +67,9 @@ public sealed class DeliveryQueue
             """,
             cancellationToken);
 
+        // PostgreSQL data-modifying CTEs share a snapshot and cannot see one
+        // another's table changes. The expired CTE's RETURNING output is therefore
+        // used explicitly to keep newly expired rows out of the due set.
         var rows = await _dbContext.Database
             .SqlQuery<ClaimedDeliveryRow>(
                 $"""
@@ -110,6 +118,8 @@ public sealed class DeliveryQueue
                         END DESC,
                         deliveries.created_at,
                         deliveries.id
+                    -- SKIP LOCKED lets concurrent workers make progress without
+                    -- waiting; ordering is deterministic only among unlocked rows.
                     FOR UPDATE OF deliveries SKIP LOCKED
                     LIMIT {limit}
                 ), claimed AS (
@@ -203,6 +213,9 @@ public sealed class DeliveryQueue
         await using var transaction =
             await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
+        // The conditional insert both validates and locks the current claim. A
+        // zero-row insert means another worker or lease recovery made it stale;
+        // the surrounding transaction keeps the attempt and state change atomic.
         var recorded = await _dbContext.Database.ExecuteSqlInterpolatedAsync(
             $"""
             INSERT INTO delivery_attempts (
@@ -277,6 +290,8 @@ public sealed class DeliveryQueue
     {
         var attemptNumber = row.AttemptCount + 1;
 
+        // A recovered send repeats the same attempt key, while a scheduled retry
+        // gets a new key. This preserves provider idempotency across worker failure.
         return new DeliveryJob(
             new DeliveryClaim(row.DeliveryId, workerId, attemptNumber),
             new ProviderRequest(

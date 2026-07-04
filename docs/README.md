@@ -17,8 +17,9 @@ current implementation and local workflow.
   states, transitions, invariants, and forbidden transitions for the target
   system.
 - [Delivery processing](reference/delivery-processing.md): worker runtime,
-  provider adapter contract, mock provider behavior, and delivery attempt
-  persistence.
+  provider adapter contract, mock provider behavior, and result recording.
+- [Persistence model](reference/persistence-model.md): implemented PostgreSQL
+  tables, relationships, constraints, and indexes.
 
 ## Architecture Decisions
 

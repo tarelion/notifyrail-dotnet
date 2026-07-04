@@ -16,6 +16,8 @@ internal static class CreateMessageRequestReader
         HttpRequest httpRequest,
         CancellationToken cancellationToken)
     {
+        // Content-Length can be absent or inaccurate (for example, with chunked
+        // requests), so the same limit is enforced again while reading the stream.
         if (httpRequest.ContentLength > MaxCreateMessageBodyBytes)
         {
             return CreateMessageReadResult.Failure(

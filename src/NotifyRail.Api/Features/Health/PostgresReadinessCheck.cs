@@ -23,6 +23,10 @@ public sealed class PostgresReadinessCheck : IReadinessCheck
 
             return result is 1;
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception)
         {
             return false;

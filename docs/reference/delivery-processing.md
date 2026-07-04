@@ -192,21 +192,8 @@ Outcome-specific delivery transitions:
 | `RetryableFailure` on max attempt | `failed` | `NULL` | `NULL` |
 | `PermanentFailure` | `failed` | `NULL` | `NULL` |
 
-## Delivery Attempts Table
-
-| Column | Type | Required | Contract |
-| --- | --- | --- | --- |
-| `id` | `uuid` | yes | Primary key. |
-| `delivery_id` | `uuid` | yes | References `deliveries(id)`. |
-| `attempt_number` | `integer` | yes | Must be greater than zero. Unique per delivery. |
-| `provider` | `text` | yes | Must not be blank after trimming. |
-| `outcome` | `text` | yes | One of `accepted`, `retryable_failure`, or `permanent_failure`. |
-| `provider_message_id` | `text` | no | Must not be blank when present. |
-| `error_code` | `text` | no | Must not be blank when present. |
-| `error_message` | `text` | no | Must not be blank when present. |
-| `attempted_at` | `timestamp with time zone` | yes | Defaults to `now()`; worker passes the provider-return time. |
-
-The database enforces `UNIQUE (delivery_id, attempt_number)`.
+The canonical table, relationship, constraint, and index definitions are in
+the [persistence model reference](persistence-model.md).
 
 ## Current Limits
 

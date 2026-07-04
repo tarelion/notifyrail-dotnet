@@ -76,6 +76,18 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
     }
 
     [Fact]
+    public async Task PostgresReadinessCheck_PropagatesCancellation()
+    {
+        var readinessCheck = new PostgresReadinessCheck(
+            "Host=127.0.0.1;Port=1;Database=notifyrail;Username=notifyrail;Password=notifyrail");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            readinessCheck.IsReadyAsync(cancellation.Token));
+    }
+
+    [Fact]
     public async Task Readyz_LimitsReadinessCheckDuration()
     {
         var readinessCheck = new HangingReadinessCheck();
