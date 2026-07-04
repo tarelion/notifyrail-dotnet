@@ -7,6 +7,8 @@ namespace NotifyRail.Api.Infrastructure.Persistence;
 public sealed class NotifyRailDbContext(DbContextOptions<NotifyRailDbContext> options)
     : DbContext(options)
 {
+    public DbSet<DeliveryAttempt> DeliveryAttempts => Set<DeliveryAttempt>();
+
     public DbSet<Delivery> Deliveries => Set<Delivery>();
 
     public DbSet<Message> Messages => Set<Message>();
