@@ -5,6 +5,10 @@ namespace NotifyRail.Api.Features.Deliveries.Queue;
 
 public sealed class DeliveryQueue
 {
+    private const int MaxAttempts = 3;
+
+    private static readonly TimeSpan BaseRetryDelay = TimeSpan.FromMinutes(1);
+
     private static readonly TimeSpan StaleClaimTimeout = TimeSpan.FromMinutes(5);
 
     private readonly NotifyRailDbContext _dbContext;
@@ -152,6 +156,123 @@ public sealed class DeliveryQueue
             .ToArray();
     }
 
+    public async Task RecordProviderResultAsync(
+        DeliveryClaim claim,
+        ProviderResult result,
+        DateTimeOffset attemptedAt,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(claim);
+        ArgumentNullException.ThrowIfNull(result);
+
+        if (claim.DeliveryId == Guid.Empty)
+        {
+            throw new ArgumentException("Delivery ID is required.", nameof(claim));
+        }
+        if (string.IsNullOrWhiteSpace(claim.WorkerId))
+        {
+            throw new ArgumentException("Worker ID is required.", nameof(claim));
+        }
+        if (claim.AttemptNumber < 1)
+        {
+            throw new ArgumentException("Attempt number must be greater than zero.", nameof(claim));
+        }
+        if (string.IsNullOrWhiteSpace(result.Provider))
+        {
+            throw new ArgumentException("Provider is required.", nameof(result));
+        }
+        if (!Enum.IsDefined(result.Outcome))
+        {
+            throw new ArgumentOutOfRangeException(nameof(result), result.Outcome, "Unknown provider outcome.");
+        }
+        if (attemptedAt == default)
+        {
+            throw new ArgumentException("Attempted time is required.", nameof(attemptedAt));
+        }
+
+        var workerId = claim.WorkerId.Trim();
+        var provider = result.Provider.Trim();
+        var outcome = ToDatabaseValue(result.Outcome);
+        var providerMessageId = NormalizeOptional(result.ProviderMessageId);
+        var errorCode = NormalizeOptional(result.ErrorCode);
+        var errorMessage = NormalizeOptional(result.ErrorMessage);
+        var nextAttemptAt = ShouldScheduleRetry(result.Outcome, claim.AttemptNumber)
+            ? attemptedAt.Add(RetryDelay(claim.AttemptNumber))
+            : (DateTimeOffset?)null;
+
+        await using var transaction =
+            await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var recorded = await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            INSERT INTO delivery_attempts (
+                delivery_id,
+                attempt_number,
+                provider,
+                outcome,
+                provider_message_id,
+                error_code,
+                error_message,
+                attempted_at
+            )
+            SELECT
+                candidate.id,
+                {claim.AttemptNumber},
+                {provider},
+                {outcome},
+                {providerMessageId},
+                {errorCode},
+                {errorMessage},
+                {attemptedAt}
+            FROM (
+                SELECT deliveries.id
+                FROM deliveries
+                WHERE deliveries.id = {claim.DeliveryId}
+                    AND deliveries.status = 'processing'
+                    AND deliveries.claimed_by = {workerId}
+                    AND deliveries.attempt_count = {claim.AttemptNumber} - 1
+                FOR UPDATE
+            ) AS candidate
+            """,
+            cancellationToken);
+
+        if (recorded == 0)
+        {
+            throw new InvalidOperationException("Delivery claim is stale.");
+        }
+
+        await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            UPDATE deliveries
+            SET
+                status = CASE
+                    WHEN {outcome} = 'accepted' THEN 'sent'
+                    WHEN {outcome} = 'retryable_failure'
+                        AND {claim.AttemptNumber} < {MaxAttempts}
+                        THEN 'retry_scheduled'
+                    ELSE 'failed'
+                END,
+                attempt_count = {claim.AttemptNumber},
+                next_attempt_at = CASE
+                    WHEN {outcome} = 'retryable_failure'
+                        AND {claim.AttemptNumber} < {MaxAttempts}
+                        THEN {nextAttemptAt}::timestamptz
+                    ELSE NULL
+                END,
+                provider_message_id = CASE
+                    WHEN {outcome} = 'accepted' THEN {providerMessageId}
+                    ELSE NULL
+                END,
+                claimed_at = NULL,
+                claimed_by = NULL,
+                updated_at = {attemptedAt}
+            WHERE id = {claim.DeliveryId}
+            """,
+            cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     private static DeliveryJob CreateJob(ClaimedDeliveryRow row, string workerId)
     {
         var attemptNumber = row.AttemptCount + 1;
@@ -164,6 +285,32 @@ public sealed class DeliveryQueue
                 row.Channel,
                 row.SenderTitle,
                 row.Body));
+    }
+
+    private static string ToDatabaseValue(ProviderOutcome outcome)
+    {
+        return outcome switch
+        {
+            ProviderOutcome.Accepted => "accepted",
+            ProviderOutcome.RetryableFailure => "retryable_failure",
+            ProviderOutcome.PermanentFailure => "permanent_failure",
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown provider outcome."),
+        };
+    }
+
+    private static string? NormalizeOptional(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static bool ShouldScheduleRetry(ProviderOutcome outcome, int attemptNumber)
+    {
+        return outcome == ProviderOutcome.RetryableFailure && attemptNumber < MaxAttempts;
+    }
+
+    private static TimeSpan RetryDelay(int attemptNumber)
+    {
+        return attemptNumber * BaseRetryDelay;
     }
 
     private sealed class ClaimedDeliveryRow
