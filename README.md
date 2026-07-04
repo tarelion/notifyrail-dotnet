@@ -1,20 +1,35 @@
 # NotifyRail .NET
 
-NotifyRail is a learning-focused C#/.NET rewrite of the original Go backend.
-The goal is to rebuild reliable notification delivery step by step while using
-idiomatic ASP.NET Core, tests, and small vertical slices.
+NotifyRail is a learning-focused C#/.NET backend that simulates reliable
+notification delivery. This repository is now the active implementation; the
+earlier Go project is the source we are porting from and keeping behaviorally
+aligned with.
 
-## Current state
+## Current Implementation
 
-- ASP.NET Core API project under `src/NotifyRail.Api`
-- xUnit test project under `tests/NotifyRail.Api.Tests`
-- `GET /healthz` liveness endpoint
-- `GET /readyz` PostgreSQL readiness endpoint
-- GitHub Actions workflow for restore, build, and test
+The repository currently provides:
+
+- process liveness and PostgreSQL readiness endpoints
+- atomic message creation with one delivery per recipient
+- globally unique idempotency keys with replay and conflict handling
+- PostgreSQL delivery claiming with scheduling, expiry, priority ordering, and
+  `FOR UPDATE SKIP LOCKED`
+- five-minute lease recovery for deliveries abandoned in `processing`
+- a hosted background worker that sends claimed deliveries through an
+  in-process mock provider
+- atomic provider-result recording for `accepted`, `retryable_failure`, and
+  `permanent_failure` outcomes, including `sent`, `retry_scheduled`, and
+  `failed` transitions
+
+The mock provider currently accepts every valid send. Provider callbacks, OTP
+verification, reports, and message read endpoints remain planned MVP work. The
+[PRD](docs/prd-notifyrail.md) describes the target MVP, not current
+implementation status.
 
 ## Requirements
 
 - .NET SDK 10.0.x
+- Docker, for local PostgreSQL
 
 On Arch Linux, install the SDK and ASP.NET Core runtime from the official repos:
 
@@ -22,36 +37,108 @@ On Arch Linux, install the SDK and ASP.NET Core runtime from the official repos:
 sudo pacman -S --needed dotnet-sdk aspnet-runtime aspnet-targeting-pack
 ```
 
-Pacman installs `dotnet` at `/usr/bin/dotnet`, which should already be on your
-PATH.
+## Run Locally
 
-## Run locally
+Start PostgreSQL:
+
+```sh
+docker compose up -d --wait postgres
+```
+
+Apply EF Core migrations:
+
+```sh
+dotnet tool restore
+dotnet ef database update --project src/NotifyRail.Api
+```
+
+Start the API:
 
 ```sh
 dotnet run --project src/NotifyRail.Api
 ```
 
-Then check the service:
+In another terminal, check the service:
 
 ```sh
-curl http://localhost:5000/healthz
-curl http://localhost:5000/readyz
+curl http://localhost:5012/healthz
+curl http://localhost:5012/readyz
 ```
 
-`/readyz` reads `ConnectionStrings:Postgres` from configuration and checks the
-database with `SELECT 1`. The development connection string expects a local
-PostgreSQL database named `notifyrail` with user/password `notifyrail`.
-
-## Test
+Create a message and its per-recipient deliveries:
 
 ```sh
-dotnet test
+curl --request POST http://localhost:5012/messages \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "type": "transactional",
+    "channel": "sms",
+    "sender_title": "NotifyRail",
+    "body": "Your order is ready.",
+    "recipients": ["+905551111111", "+905552222222"],
+    "idempotency_key": "order-42-ready"
+  }'
 ```
 
-## Roadmap
+A successful request returns `202 Accepted` with the message ID, delivery count,
+and creation time. The hosted delivery worker will claim due deliveries in the
+background and send them through the mock provider. See the
+[HTTP API reference](docs/reference/http-api.md) for the complete current
+contract.
 
-The first learning slices should stay small:
+Stop PostgreSQL:
 
-1. Add message creation request/response models.
-2. Persist messages and deliveries transactionally.
-3. Add delivery claiming and worker processing.
+```sh
+docker compose down
+```
+
+To also delete local PostgreSQL data, use `docker compose down -v`.
+
+## Development
+
+The API reads PostgreSQL from `ConnectionStrings:Postgres`. The development
+configuration expects:
+
+```text
+Host=localhost;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail
+```
+
+Useful commands:
+
+```sh
+docker compose up -d --wait postgres
+dotnet restore
+dotnet build NotifyRail.slnx
+dotnet test NotifyRail.slnx
+```
+
+When changing EF models or persistence mappings, create and apply a migration:
+
+```sh
+dotnet ef migrations add <MigrationName> --project src/NotifyRail.Api
+dotnet ef database update --project src/NotifyRail.Api
+```
+
+## Tests
+
+Run the suite:
+
+```sh
+docker compose up -d --wait postgres
+dotnet test NotifyRail.slnx
+```
+
+The current integration tests use PostgreSQL. Keep the database container
+running before executing the full suite.
+
+## Implemented Endpoints
+
+- `GET /healthz`: process liveness
+- `GET /readyz`: PostgreSQL connectivity
+- `POST /messages`: idempotent message and delivery creation
+
+## Documentation
+
+Start with the [documentation index](docs/README.md). Canonical contracts live
+under `docs/reference/`; product direction lives in the PRD. Existing .NET
+architecture decisions live under `docs/adr/`.
