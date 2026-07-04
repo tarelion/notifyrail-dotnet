@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,6 +13,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
     private const string FailingRecipient = "__notifyrail_fail_delivery_insert__";
+    private const int MaxCreateMessageBodyBytes = 1 << 20;
 
     private readonly WebApplicationFactory<Program> _factory;
 
@@ -127,6 +129,92 @@ public sealed class CreateMessageEndpointIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.NotNull(error);
         Assert.Equal("type must be one of: otp, transactional, campaign", error.Error);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("""{"type":""")]
+    [InlineData(
+        """
+        {
+            "type":"transactional",
+            "channel":"sms",
+            "sender_title":"NotifyRail",
+            "body":"Hello",
+            "recipients":["+905551111111"],
+            "idempotency_key":"request-1",
+            "unexpected":true
+        }
+        """)]
+    [InlineData(
+        """
+        {
+            "type":"transactional",
+            "channel":"sms",
+            "sender_title":"NotifyRail",
+            "body":"Hello",
+            "recipients":["+905551111111"],
+            "idempotency_key":"request-1"
+        }{}
+        """)]
+    public async Task CreateMessage_ReturnsBadRequest_WhenJsonBodyIsInvalid(string body)
+    {
+        using var client = _factory.CreateClient();
+        using var response = await client.PostAsync(
+            "/messages",
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        var error = await response.Content.ReadFromJsonAsync<CreateMessageErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(error);
+        Assert.StartsWith("invalid JSON body", error.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateMessage_ReturnsBadRequest_WhenJsonBodyExceedsSizeLimit()
+    {
+        using var client = _factory.CreateClient();
+        var body = "{\"body\":\"" + new string('x', MaxCreateMessageBodyBytes) + "\"}";
+
+        using var response = await client.PostAsync(
+            "/messages",
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        var error = await response.Content.ReadFromJsonAsync<CreateMessageErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(error);
+        Assert.Equal("invalid JSON body: request body is too large", error.Error);
+    }
+
+    [Fact]
+    public async Task CreateMessage_AcceptsJsonBodyAtSizeLimit()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = _factory.CreateClient();
+        var body = $$"""
+            {
+                "type":"transactional",
+                "channel":"sms",
+                "sender_title":"NotifyRail",
+                "body":"Hello",
+                "recipients":["+905551111111"],
+                "idempotency_key":"size-limit-{{Guid.NewGuid()}}"
+            }
+            """;
+        body += new string(' ', MaxCreateMessageBodyBytes - Encoding.UTF8.GetByteCount(body));
+
+        using var response = await client.PostAsync(
+            "/messages",
+            new StringContent(body, Encoding.UTF8, "application/json"));
+
+        var receipt = await response.Content.ReadFromJsonAsync<CreateMessageResponse>();
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.NotNull(receipt);
+        Assert.Equal(1, receipt.DeliveryCount);
     }
 
     [Fact]

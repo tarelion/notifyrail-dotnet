@@ -14,10 +14,19 @@ public static class CreateMessageEndpoint
     }
 
     private static async Task<IResult> CreateAsync(
-        CreateMessageRequest request,
+        HttpRequest httpRequest,
         MessageIntake messageIntake,
         CancellationToken cancellationToken)
     {
+        var readResult = await CreateMessageRequestReader.ReadAsync(
+            httpRequest,
+            cancellationToken);
+        if (!readResult.IsSuccess)
+        {
+            return Results.BadRequest(new CreateMessageErrorResponse(readResult.Error!));
+        }
+
+        var request = readResult.Request!;
         var normalization = CreateMessageRequestNormalizer.Normalize(request);
         if (!normalization.IsSuccess)
         {

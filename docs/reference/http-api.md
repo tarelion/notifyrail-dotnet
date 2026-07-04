@@ -36,7 +36,7 @@ readiness check. It does not verify that migrations are current.
 | Status | Body | Condition |
 | --- | --- | --- |
 | `200 OK` | `{"status":"ready"}` | PostgreSQL ping succeeds. |
-| `503 Service Unavailable` | `{"status":"not_ready"}` | PostgreSQL ping fails or times out. |
+| `503 Service Unavailable` | `{"status":"unavailable"}` | PostgreSQL ping fails or times out. |
 
 ## `POST /messages`
 
@@ -56,11 +56,9 @@ Atomically creates one message and one delivery for each recipient.
 | `report_label` | string or `null` | no | Trimmed before storage. |
 | `encoding` | string or `null` | no | When present, one of `latin`, `turkish`, or `unicode`. |
 
-Recipient format is not otherwise validated in the current implementation.
-
-The current ASP.NET Core endpoint uses normal model binding behavior. It does
-not yet enforce the stricter Go HTTP decoder rules such as a 1 MiB request body
-limit, rejection of unknown fields, or rejection of multiple JSON values.
+Recipient format is not otherwise validated in the current implementation. The
+request body must be at most 1 MiB, must contain exactly one JSON object, and
+must not include unknown fields.
 
 ### Success Response
 
@@ -101,12 +99,9 @@ Errors use this shape:
 
 | Status | Condition |
 | --- | --- |
-| `400 Bad Request` | Invalid normalized input. |
+| `400 Bad Request` | Invalid JSON body or invalid normalized input. |
 | `409 Conflict` | The idempotency key already belongs to a different normalized request. |
 | `500 Internal Server Error` | Message creation could not complete because of an internal or persistence error. |
-
-Framework-level JSON binding failures can also produce ASP.NET Core validation
-responses outside the `{"error":"..."}` shape.
 
 ### Example Request
 

@@ -2,6 +2,8 @@ namespace NotifyRail.Api.Features.Health;
 
 public static class HealthEndpoints
 {
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(2);
+
     public static IEndpointRouteBuilder MapHealthEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/healthz", () => Results.Ok(new HealthResponse("ok")));
@@ -14,12 +16,30 @@ public static class HealthEndpoints
         IReadinessCheck readinessCheck,
         CancellationToken cancellationToken)
     {
-        var isReady = await readinessCheck.IsReadyAsync(cancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ReadinessTimeout);
+
+        var isReady = await IsReadyAsync(readinessCheck, timeout.Token, cancellationToken);
 
         return isReady
             ? Results.Ok(new ReadinessResponse("ready"))
             : Results.Json(
-                new ReadinessResponse("not_ready"),
+                new ReadinessResponse("unavailable"),
                 statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static async Task<bool> IsReadyAsync(
+        IReadinessCheck readinessCheck,
+        CancellationToken readinessToken,
+        CancellationToken requestToken)
+    {
+        try
+        {
+            return await readinessCheck.IsReadyAsync(readinessToken);
+        }
+        catch (OperationCanceledException) when (!requestToken.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 }

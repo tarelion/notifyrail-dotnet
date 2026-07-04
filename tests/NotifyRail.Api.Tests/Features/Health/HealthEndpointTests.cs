@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Diagnostics;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -71,7 +72,33 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.NotNull(body);
-        Assert.Equal("not_ready", body.Status);
+        Assert.Equal("unavailable", body.Status);
+    }
+
+    [Fact]
+    public async Task Readyz_LimitsReadinessCheckDuration()
+    {
+        var readinessCheck = new HangingReadinessCheck();
+        await using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.AddSingleton<IReadinessCheck>(readinessCheck);
+            });
+        });
+        using var client = factory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(3);
+
+        var stopwatch = Stopwatch.StartNew();
+        using var response = await client.GetAsync("/readyz");
+        stopwatch.Stop();
+        var body = await response.Content.ReadFromJsonAsync<ReadinessResponse>();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.NotNull(body);
+        Assert.Equal("unavailable", body.Status);
+        Assert.True(readinessCheck.WasCanceled);
+        Assert.True(stopwatch.Elapsed <= TimeSpan.FromSeconds(3));
     }
 
     private sealed class StubReadinessCheck : IReadinessCheck
@@ -86,6 +113,25 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
         public Task<bool> IsReadyAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(_isReady);
+        }
+    }
+
+    private sealed class HangingReadinessCheck : IReadinessCheck
+    {
+        public bool WasCanceled { get; private set; }
+
+        public async Task<bool> IsReadyAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                WasCanceled = true;
+                return false;
+            }
         }
     }
 }

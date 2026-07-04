@@ -128,6 +128,133 @@ public sealed class DeliveryQueueIntegrationTests
     }
 
     [Fact]
+    public async Task ClaimDueAsync_WaitsUntilScheduledMessageIsDue()
+    {
+        await ResetDatabaseAsync();
+        var claimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        await CreateMessageAsync(scheduledAt: claimTime.AddMinutes(5));
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
+
+        var earlyJobs = await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 10,
+            claimTime,
+            CancellationToken.None);
+        var dueJobs = await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 10,
+            claimTime.AddMinutes(5),
+            CancellationToken.None);
+
+        Assert.Empty(earlyJobs);
+        Assert.Single(dueJobs);
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_UsesMessagePriorityAndBatchLimit()
+    {
+        await ResetDatabaseAsync();
+        await CreateMessageAsync(
+            recipients: ["+905553333333"],
+            type: "campaign");
+        await CreateMessageAsync(
+            recipients: ["+905551111111"],
+            type: "otp");
+        await CreateMessageAsync(
+            recipients: ["+905552222222"],
+            type: "transactional");
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
+
+        var jobs = await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 2,
+            DateTimeOffset.UtcNow,
+            CancellationToken.None);
+
+        Assert.Collection(
+            jobs,
+            job => Assert.Equal("+905551111111", job.Request.Recipient),
+            job => Assert.Equal("+905552222222", job.Request.Recipient));
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_WaitsUntilRetryIsDue()
+    {
+        await ResetDatabaseAsync();
+        await CreateMessageAsync();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
+        var claimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var job = Assert.Single(await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 1,
+            claimTime,
+            CancellationToken.None));
+        var attemptedAt = claimTime.AddSeconds(1);
+        await queue.RecordProviderResultAsync(
+            job.Claim,
+            new ProviderResult(ProviderOutcome.RetryableFailure, Provider: "mock"),
+            attemptedAt,
+            CancellationToken.None);
+
+        var earlyJobs = await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 1,
+            attemptedAt.AddSeconds(30),
+            CancellationToken.None);
+        var dueJobs = await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 1,
+            attemptedAt.AddMinutes(1),
+            CancellationToken.None);
+
+        Assert.Empty(earlyJobs);
+        var retryJob = Assert.Single(dueJobs);
+        Assert.EndsWith("-attempt-2", retryJob.Request.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_RecoversRetryWhenFiveMinuteLeaseExpires()
+    {
+        await ResetDatabaseAsync();
+        await CreateMessageAsync();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
+        var firstClaimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var firstJob = Assert.Single(await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 1,
+            firstClaimTime,
+            CancellationToken.None));
+        var attemptedAt = firstClaimTime.AddSeconds(1);
+        await queue.RecordProviderResultAsync(
+            firstJob.Claim,
+            new ProviderResult(ProviderOutcome.RetryableFailure, Provider: "mock"),
+            attemptedAt,
+            CancellationToken.None);
+        var retryJob = Assert.Single(await queue.ClaimDueAsync(
+            "worker-a",
+            limit: 1,
+            attemptedAt.AddMinutes(1),
+            CancellationToken.None));
+
+        var recoveredJobs = await queue.ClaimDueAsync(
+            "worker-b",
+            limit: 1,
+            attemptedAt.AddMinutes(6),
+            CancellationToken.None);
+
+        var recoveredJob = Assert.Single(recoveredJobs);
+        Assert.Equal(retryJob.Request.IdempotencyKey, recoveredJob.Request.IdempotencyKey);
+    }
+
+    [Fact]
     public async Task ClaimDueAsync_SkipsLockedDeliveryAndClaimsAvailableDelivery()
     {
         await ResetDatabaseAsync();
@@ -375,18 +502,22 @@ public sealed class DeliveryQueueIntegrationTests
             CancellationToken.None);
     }
 
-    private async Task CreateMessageAsync(string[]? recipients = null)
+    private async Task CreateMessageAsync(
+        string[]? recipients = null,
+        string type = "transactional",
+        DateTimeOffset? scheduledAt = null)
     {
         using var client = _factory.CreateClient();
         using var response = await client.PostAsJsonAsync(
             "/messages",
             new CreateMessageRequest(
-                Type: "transactional",
+                Type: type,
                 Channel: "sms",
                 SenderTitle: "NotifyRail",
                 Body: "Your order is ready.",
                 Recipients: recipients ?? ["+905551111111"],
-                IdempotencyKey: $"claim-due-{Guid.NewGuid()}"),
+                IdempotencyKey: $"claim-due-{Guid.NewGuid()}",
+                ScheduledAt: scheduledAt),
             CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);

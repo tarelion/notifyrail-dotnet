@@ -104,11 +104,11 @@ public sealed class DeliveryConfiguration : IEntityTypeConfiguration<Delivery>
             .HasDatabaseName("deliveries_provider_message_id_idx");
 
         builder.HasIndex(delivery => new
-            {
-                delivery.Status,
-                delivery.NextAttemptAt,
-                delivery.CreatedAt,
-            })
+        {
+            delivery.Status,
+            delivery.NextAttemptAt,
+            delivery.CreatedAt,
+        })
             .HasFilter("status IN ('queued', 'retry_scheduled')")
             .HasDatabaseName("deliveries_due_idx");
     }
