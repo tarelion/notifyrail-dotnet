@@ -9,7 +9,7 @@ using NotifyRail.Api.Infrastructure.Persistence;
 namespace NotifyRail.Api.Tests;
 
 public sealed class CreateMessageEndpointIntegrationTests
-    : IClassFixture<WebApplicationFactory<Program>>
+    : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
     private const string FailingRecipient = "__notifyrail_fail_delivery_insert__";
 
@@ -17,7 +17,12 @@ public sealed class CreateMessageEndpointIntegrationTests
 
     public CreateMessageEndpointIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory;
+        _factory = factory.WithoutHostedServices();
+    }
+
+    public void Dispose()
+    {
+        _factory.Dispose();
     }
 
     [Fact]

@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NotifyRail.Api.Features.Deliveries.Worker;
 using NotifyRail.Api.Features.Messages.CreateMessage;
@@ -10,13 +12,23 @@ using NotifyRail.Api.Infrastructure.Persistence;
 namespace NotifyRail.Api.Tests;
 
 public sealed class DeliveryWorkerIntegrationTests
-    : IClassFixture<WebApplicationFactory<Program>>
+    : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private const string PostgresConnectionString =
+        "Host=localhost;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail";
+
+    private readonly WebApplicationFactory<Program> _hostedFactory;
+    private readonly WebApplicationFactory<Program> _manualFactory;
 
     public DeliveryWorkerIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory;
+        _hostedFactory = factory;
+        _manualFactory = factory.WithoutHostedServices();
+    }
+
+    public void Dispose()
+    {
+        _manualFactory.Dispose();
     }
 
     [Fact]
@@ -25,7 +37,7 @@ public sealed class DeliveryWorkerIntegrationTests
         await ResetDatabaseAsync();
         await CreateMessageAsync();
 
-        await using var scope = _factory.Services.CreateAsyncScope();
+        await using var scope = _manualFactory.Services.CreateAsyncScope();
         var worker = scope.ServiceProvider.GetRequiredService<DeliveryWorker>();
 
         var processed = await worker.ProcessBatchAsync(
@@ -44,9 +56,36 @@ public sealed class DeliveryWorkerIntegrationTests
         Assert.Equal(providerMessageId, state.AttemptProviderMessageId);
     }
 
+    [Fact]
+    public async Task BackgroundService_SendsDueDeliveryWithoutManualBatchCall()
+    {
+        await ResetDatabaseWithoutStartingHostAsync();
+
+        await using var factory = _hostedFactory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, configuration) =>
+            {
+                configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DeliveryWorker:BatchSize"] = "1",
+                    ["DeliveryWorker:PollInterval"] = "00:00:00.050",
+                });
+            });
+        });
+        using var client = factory.CreateClient();
+
+        await CreateMessageAsync(client);
+
+        var state = await WaitForDeliveryStatusAsync("sent");
+        Assert.Equal(1, state.AttemptCount);
+        Assert.StartsWith("mock_", state.ProviderMessageId);
+        Assert.Equal("mock", state.AttemptProvider);
+        Assert.Equal("accepted", state.AttemptOutcome);
+    }
+
     private async Task ResetDatabaseAsync()
     {
-        await using var scope = _factory.Services.CreateAsyncScope();
+        await using var scope = _manualFactory.Services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         await dbContext.Database.MigrateAsync(CancellationToken.None);
@@ -57,7 +96,12 @@ public sealed class DeliveryWorkerIntegrationTests
 
     private async Task CreateMessageAsync()
     {
-        using var client = _factory.CreateClient();
+        using var client = _manualFactory.CreateClient();
+        await CreateMessageAsync(client);
+    }
+
+    private static async Task CreateMessageAsync(HttpClient client)
+    {
         using var response = await client.PostAsJsonAsync(
             "/messages",
             new CreateMessageRequest(
@@ -72,27 +116,81 @@ public sealed class DeliveryWorkerIntegrationTests
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
     }
 
+    private static async Task ResetDatabaseWithoutStartingHostAsync()
+    {
+        var options = new DbContextOptionsBuilder<NotifyRailDbContext>()
+            .UseNpgsql(PostgresConnectionString)
+            .Options;
+
+        await using var dbContext = new NotifyRailDbContext(options);
+        await dbContext.Database.MigrateAsync(CancellationToken.None);
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "TRUNCATE delivery_attempts, deliveries, messages;",
+            CancellationToken.None);
+    }
+
+    private static async Task<DeliveryState> WaitForDeliveryStatusAsync(string status)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (!timeout.IsCancellationRequested)
+        {
+            var state = await LoadDeliveryStateWithoutStartingHostAsync();
+            if (state.Status == status)
+            {
+                return state;
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), timeout.Token);
+            }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        return await LoadDeliveryStateWithoutStartingHostAsync();
+    }
+
+    private static async Task<DeliveryState> LoadDeliveryStateWithoutStartingHostAsync()
+    {
+        var options = new DbContextOptionsBuilder<NotifyRailDbContext>()
+            .UseNpgsql(PostgresConnectionString)
+            .Options;
+
+        await using var dbContext = new NotifyRailDbContext(options);
+
+        return await dbContext.Database
+            .SqlQueryRaw<DeliveryState>(
+                DeliveryStateSql)
+            .SingleAsync(CancellationToken.None);
+    }
+
     private async Task<DeliveryState> LoadDeliveryStateAsync()
     {
-        await using var scope = _factory.Services.CreateAsyncScope();
+        await using var scope = _manualFactory.Services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         return await dbContext.Database
             .SqlQueryRaw<DeliveryState>(
-                """
-                SELECT
-                    deliveries.status AS "Status",
-                    deliveries.attempt_count AS "AttemptCount",
-                    deliveries.provider_message_id AS "ProviderMessageId",
-                    delivery_attempts.provider AS "AttemptProvider",
-                    delivery_attempts.outcome AS "AttemptOutcome",
-                    delivery_attempts.provider_message_id AS "AttemptProviderMessageId"
-                FROM deliveries
-                LEFT JOIN delivery_attempts
-                    ON delivery_attempts.delivery_id = deliveries.id
-                """)
+                DeliveryStateSql)
             .SingleAsync(CancellationToken.None);
     }
+
+    private const string DeliveryStateSql =
+        """
+        SELECT
+            deliveries.status AS "Status",
+            deliveries.attempt_count AS "AttemptCount",
+            deliveries.provider_message_id AS "ProviderMessageId",
+            delivery_attempts.provider AS "AttemptProvider",
+            delivery_attempts.outcome AS "AttemptOutcome",
+            delivery_attempts.provider_message_id AS "AttemptProviderMessageId"
+        FROM deliveries
+        LEFT JOIN delivery_attempts
+            ON delivery_attempts.delivery_id = deliveries.id
+        """;
 
     private sealed class DeliveryState
     {

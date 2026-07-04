@@ -10,13 +10,18 @@ using NotifyRail.Api.Infrastructure.Persistence;
 namespace NotifyRail.Api.Tests;
 
 public sealed class DeliveryQueueIntegrationTests
-    : IClassFixture<WebApplicationFactory<Program>>
+    : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
     private readonly WebApplicationFactory<Program> _factory;
 
     public DeliveryQueueIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory;
+        _factory = factory.WithoutHostedServices();
+    }
+
+    public void Dispose()
+    {
+        _factory.Dispose();
     }
 
     [Fact]

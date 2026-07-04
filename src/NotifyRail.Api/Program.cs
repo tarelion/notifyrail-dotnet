@@ -22,6 +22,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddSingleton<IProviderSender, MockProvider>();
     builder.Services.AddScoped<DeliveryQueue>();
     builder.Services.AddScoped<DeliveryWorker>();
+    builder.Services.AddHostedService<DeliveryWorkerBackgroundService>();
     builder.Services.AddScoped<MessageIntake>();
 }
 

@@ -30,7 +30,10 @@ public sealed class DeliveryWorker
                 "Worker ID is required.",
                 nameof(options));
         }
-        if (options.Value.BatchSize < 1)
+        var batchSize = options.Value.BatchSize == 0
+            ? DeliveryWorkerOptions.DefaultBatchSize
+            : options.Value.BatchSize;
+        if (batchSize < 1)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(options),
@@ -42,7 +45,7 @@ public sealed class DeliveryWorker
         _sender = sender;
         _timeProvider = timeProvider;
         _workerId = workerId;
-        _batchSize = options.Value.BatchSize;
+        _batchSize = batchSize;
     }
 
     public async Task<int> ProcessBatchAsync(

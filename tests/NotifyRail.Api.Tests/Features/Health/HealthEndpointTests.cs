@@ -7,13 +7,18 @@ using NotifyRail.Api.Features.Health;
 
 namespace NotifyRail.Api.Tests;
 
-public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
     private readonly WebApplicationFactory<Program> _factory;
 
     public HealthEndpointTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory;
+        _factory = factory.WithoutHostedServices();
+    }
+
+    public void Dispose()
+    {
+        _factory.Dispose();
     }
 
     [Fact]
