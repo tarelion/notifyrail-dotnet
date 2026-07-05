@@ -5,4 +5,5 @@ public sealed record ProviderRequest(
     string Recipient,
     string Channel,
     string SenderTitle,
-    string Body);
+    string Body,
+    int AttemptNumber = 1);

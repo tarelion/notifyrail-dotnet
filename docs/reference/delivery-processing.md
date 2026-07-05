@@ -35,6 +35,7 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `DeliveryWorker:WorkerId` | configuration / `DeliveryWorkerOptions.WorkerId` | `notifyrail-<guid>` | Trimmed non-empty worker identity. |
 | `DeliveryWorker:BatchSize` | configuration / `DeliveryWorkerOptions.BatchSize` | `1` | `0` uses the default; negative values are invalid. |
 | `DeliveryWorker:PollInterval` | configuration / `DeliveryWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
+| `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 
 ## Provider Adapter Contract
 
@@ -64,6 +65,7 @@ transient provider exception into a persisted attempt without receiving a
 | `Channel` | yes | Message channel. Current intake accepts only `sms`. |
 | `SenderTitle` | yes | Sender title copied from the message. |
 | `Body` | yes | Message body copied from the message. |
+| `AttemptNumber` | yes | One-based delivery attempt number used by configurable provider scenarios. |
 
 ### Result Fields
 
@@ -99,7 +101,42 @@ implementation.
 | --- | --- |
 | Canceled token | Throws `OperationCanceledException`. |
 | Blank `IdempotencyKey` after trimming | Throws `ArgumentException`. |
-| Valid request | Returns `ProviderOutcome.Accepted`, `Provider: "mock"`, and a deterministic provider message ID. |
+| Recipient has no configured rule | Returns `Accepted` with a deterministic provider message ID. |
+| Configured outcome is `accepted` | Returns `Accepted` with a deterministic provider message ID. |
+| Configured outcome is `retryable_failure` | Returns `RetryableFailure` with error code `mock_retryable_failure`. |
+| Configured outcome is `permanent_failure` | Returns `PermanentFailure` with error code `mock_permanent_failure`. |
+
+### Recipient Outcome Rules
+
+Each rule matches one normalized recipient and defines the result for each
+one-based attempt. When an attempt number is greater than the sequence length,
+the final configured outcome is repeated. An empty rule list preserves the
+default accept-all behavior.
+
+```json
+{
+  "MockProvider": {
+    "Rules": [
+      {
+        "Recipient": "+905552222222",
+        "Outcomes": ["retryable_failure", "accepted"]
+      },
+      {
+        "Recipient": "+905553333333",
+        "Outcomes": ["permanent_failure"]
+      }
+    ]
+  }
+}
+```
+
+Supported outcome values are `accepted`, `retryable_failure`, and
+`permanent_failure`. A configured rule must contain at least one outcome;
+otherwise provider construction fails with `OptionsValidationException`.
+
+The example makes `+905552222222` fail temporarily on its first attempt and
+succeed on its second. `+905553333333` fails permanently on its first attempt.
+Every other recipient is accepted.
 
 The mock provider message ID is:
 
@@ -208,8 +245,6 @@ the [persistence model reference](persistence-model.md).
 
 ## Current Limits
 
-- The production-wired mock provider accepts every valid send, so retryable and
-  permanent transitions require tests or another provider adapter to exercise.
 - Provider callbacks are not wired yet.
 - The retry policy is not configurable.
 - The stale claim lease is not configurable.

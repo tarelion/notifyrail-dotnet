@@ -299,7 +299,8 @@ public sealed class DeliveryQueue
                 row.Recipient,
                 row.Channel,
                 row.SenderTitle,
-                row.Body));
+                row.Body,
+                attemptNumber));
     }
 
     private static string ToDatabaseValue(ProviderOutcome outcome)

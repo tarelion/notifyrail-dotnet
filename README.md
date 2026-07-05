@@ -16,16 +16,17 @@ The repository currently provides:
   `FOR UPDATE SKIP LOCKED`
 - five-minute lease recovery for deliveries abandoned in `processing`
 - a hosted background worker that sends claimed deliveries through an
-  in-process mock provider
+  in-process, recipient-configurable mock provider
 - atomic provider-result recording for `accepted`, `retryable_failure`, and
   `permanent_failure` outcomes, including `sent`, `retry_scheduled`, and
   `failed` transitions
 - recipient-level delivery reads with ordered provider attempt history
 - aggregate message reports with counts for every delivery status
 
-The mock provider currently accepts every valid send. Provider callbacks, OTP
-verification, and message summary reads remain planned MVP work. The
-[PRD](docs/prd-notifyrail.md) describes the target MVP, not current
+The mock provider accepts unmatched recipients by default and can apply an
+attempt-by-attempt outcome sequence to configured recipients. Provider
+callbacks, OTP verification, and message summary reads remain planned MVP work.
+The [PRD](docs/prd-notifyrail.md) describes the target MVP, not current
 implementation status.
 
 ## Requirements

@@ -20,6 +20,8 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
         options.UseNpgsql(postgresConnectionString));
     builder.Services.Configure<DeliveryWorkerOptions>(
         builder.Configuration.GetSection(DeliveryWorkerOptions.SectionName));
+    builder.Services.Configure<MockProviderOptions>(
+        builder.Configuration.GetSection(MockProviderOptions.SectionName));
     builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddSingleton<IProviderSender, MockProvider>();
     builder.Services.AddScoped<DeliveryQueue>();
