@@ -11,6 +11,8 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 - Health endpoints: `src/NotifyRail.Api/Features/Health`
 - Message endpoint: `src/NotifyRail.Api/Features/Messages/CreateMessage`
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
+- Message delivery endpoint:
+  `src/NotifyRail.Api/Features/Messages/GetMessageDeliveries`
 
 Responses explicitly produced by the registered handlers use JSON payloads.
 Unhandled failures are delegated to ASP.NET Core and do not currently have an
@@ -119,4 +121,83 @@ curl --request POST http://localhost:5012/messages \
     "recipients": ["+905551111111", "+905552222222"],
     "idempotency_key": "order-42-ready"
   }'
+```
+
+## `GET /messages/{message_id}/deliveries`
+
+Returns every recipient delivery for a message together with its provider
+attempt history. `message_id` must be a UUID.
+
+Deliveries are ordered by `created_at` and then `delivery_id`. Attempts within
+each delivery are ordered by `attempt_number`.
+
+### Success Response
+
+- Status: `200 OK`
+
+```json
+{
+  "message_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "deliveries": [
+    {
+      "delivery_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
+      "recipient": "+905551111111",
+      "status": "sent",
+      "attempt_count": 1,
+      "next_attempt_at": null,
+      "provider_message_id": "mock_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expires_at": null,
+      "created_at": "2026-06-30T12:00:00Z",
+      "updated_at": "2026-06-30T12:00:01Z",
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "provider": "mock",
+          "outcome": "accepted",
+          "provider_message_id": "mock_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "error_code": null,
+          "error_message": null,
+          "attempted_at": "2026-06-30T12:00:01Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Delivery Fields
+
+| Field | JSON type | Nullable | Contract |
+| --- | --- | --- | --- |
+| `delivery_id` | string UUID | no | Identifies the recipient delivery. |
+| `recipient` | string | no | Normalized recipient stored at message creation. |
+| `status` | string | no | Current state from the delivery lifecycle. |
+| `attempt_count` | integer | no | Number of recorded provider attempts. |
+| `next_attempt_at` | RFC 3339 timestamp | yes | Present only when a retry is scheduled. |
+| `provider_message_id` | string | yes | Provider identifier recorded for an accepted send. |
+| `expires_at` | RFC 3339 timestamp | yes | Delivery expiry instant when configured. |
+| `created_at` | RFC 3339 timestamp | no | Delivery creation instant. |
+| `updated_at` | RFC 3339 timestamp | no | Instant of the latest delivery state change. |
+| `attempts` | array | no | Provider attempts in ascending attempt-number order. |
+
+### Attempt Fields
+
+| Field | JSON type | Nullable | Contract |
+| --- | --- | --- | --- |
+| `attempt_number` | integer | no | One-based attempt sequence for the delivery. |
+| `provider` | string | no | Stable provider name. |
+| `outcome` | string | no | `accepted`, `retryable_failure`, or `permanent_failure`. |
+| `provider_message_id` | string | yes | Provider identifier returned by that attempt. |
+| `error_code` | string | yes | Normalized provider error code. |
+| `error_message` | string | yes | Provider error detail. |
+| `attempted_at` | RFC 3339 timestamp | no | Instant the provider result was recorded. |
+
+### Error Response
+
+If no message has the requested UUID:
+
+- Status: `404 Not Found`
+
+```json
+{"error":"message not found"}
 ```

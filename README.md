@@ -20,10 +20,11 @@ The repository currently provides:
 - atomic provider-result recording for `accepted`, `retryable_failure`, and
   `permanent_failure` outcomes, including `sent`, `retry_scheduled`, and
   `failed` transitions
+- recipient-level delivery reads with ordered provider attempt history
 
 The mock provider currently accepts every valid send. Provider callbacks, OTP
-verification, reports, and message read endpoints remain planned MVP work. The
-[PRD](docs/prd-notifyrail.md) describes the target MVP, not current
+verification, aggregate reports, and message summary reads remain planned MVP
+work. The [PRD](docs/prd-notifyrail.md) describes the target MVP, not current
 implementation status.
 
 ## Requirements
@@ -136,6 +137,8 @@ running before executing the full suite.
 - `GET /healthz`: process liveness
 - `GET /readyz`: PostgreSQL connectivity
 - `POST /messages`: idempotent message and delivery creation
+- `GET /messages/{message_id}/deliveries`: recipient delivery states and
+  attempt history
 
 ## Documentation
 
