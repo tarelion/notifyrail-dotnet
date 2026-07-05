@@ -17,6 +17,8 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
   `src/NotifyRail.Api/Features/Messages/GetMessageReport`
 - Mock provider callback endpoint:
   `src/NotifyRail.Api/Features/Deliveries/ProviderCallbacks/Mock`
+- OTP endpoints: `src/NotifyRail.Api/Features/Otp/SendOtp` and
+  `src/NotifyRail.Api/Features/Otp/VerifyOtp`
 
 Responses explicitly produced by the registered handlers use JSON payloads.
 Unhandled failures are delegated to ASP.NET Core and do not currently have an
@@ -205,6 +207,96 @@ If no message has the requested UUID:
 ```json
 {"error":"message not found"}
 ```
+
+## `POST /otp/send`
+
+Creates one OTP Challenge, one `otp` Message, and one recipient Delivery in a
+single transaction.
+
+### Request Body
+
+| Field | JSON type | Required | Contract |
+| --- | --- | --- | --- |
+| `recipient` | string | yes | Trimmed non-blank SMS recipient. |
+| `idempotency_key` | string | yes | Trimmed globally unique Message idempotency key. |
+
+```json
+{
+  "recipient": "+905551111111",
+  "idempotency_key": "login-42"
+}
+```
+
+### Success Response
+
+- Status: `202 Accepted`
+
+```json
+{
+  "otp_id": "ffeff488-5c94-45d1-a972-8d38d51eb135",
+  "message_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "expires_at": "2026-07-05T12:05:00Z",
+  "debug_code": "482193"
+}
+```
+
+`debug_code` is a sensitive, simulation-only field. Its plaintext value is not
+stored in PostgreSQL or in the Message body.
+
+Repeating the same normalized request with the same idempotency key returns the
+original response, including the same `debug_code`. Reusing the key with a
+different recipient returns `409 Conflict`.
+
+### Error Responses
+
+| Status | Body | Condition |
+| --- | --- | --- |
+| `400 Bad Request` | `{"error":"recipient is required"}` | Recipient is null, empty, or whitespace. |
+| `400 Bad Request` | `{"error":"idempotency_key is required"}` | Idempotency key is null, empty, or whitespace. |
+| `409 Conflict` | `{"error":"idempotency key is already used with different content"}` | Key belongs to another normalized request. |
+
+## `POST /otp/verify`
+
+Verifies one active OTP Challenge using its six-digit code.
+
+### Request Body
+
+```json
+{
+  "otp_id": "ffeff488-5c94-45d1-a972-8d38d51eb135",
+  "code": "482193"
+}
+```
+
+`otp_id` must be a non-empty UUID. `code` must contain exactly six ASCII digits.
+
+### Success Response
+
+- Status: `200 OK`
+
+```json
+{
+  "otp_id": "ffeff488-5c94-45d1-a972-8d38d51eb135",
+  "status": "verified",
+  "verified_at": "2026-07-05T12:01:00Z"
+}
+```
+
+### Error Responses
+
+| Status | Body | Condition |
+| --- | --- | --- |
+| `400 Bad Request` | `{"error":"otp_id is required"}` | OTP ID is absent or empty. |
+| `400 Bad Request` | `{"error":"code must contain exactly 6 digits"}` | Code shape is invalid. |
+| `400 Bad Request` | `{"error":"invalid OTP code","attempts_remaining":4}` | Code is incorrect and attempts remain. |
+| `404 Not Found` | `{"error":"OTP challenge not found"}` | OTP ID is unknown. |
+| `409 Conflict` | `{"error":"OTP challenge is already verified"}` | Challenge was already used successfully. |
+| `410 Gone` | `{"error":"OTP challenge has expired"}` | Current time is at or after expiry. |
+| `429 Too Many Requests` | `{"error":"OTP attempt limit exceeded","attempts_remaining":0}` | Incorrect-attempt limit is reached. |
+
+Verification is serialized with a PostgreSQL row lock. Concurrent correct
+requests therefore produce one `200 OK`; later requests observe the verified
+state and return `409 Conflict`.
 
 ## `POST /provider-callbacks/mock`
 

@@ -90,7 +90,11 @@ capabilities.
 ## OTP-Specific Rules
 
 - OTP deliveries use the same delivery lifecycle.
-- OTP codes must have a TTL.
+- OTP Challenge and Delivery expiry use the same configured TTL.
 - OTP verification is separate from delivery success.
 - A delivered OTP can still fail verification if expired, already used, or
   incorrect.
+- OTP verification succeeds once; concurrent correct requests are serialized by
+  a database row lock.
+- Incorrect codes consume the configured attempt limit. Expired, verified, and
+  locked challenges do not consume more attempts.

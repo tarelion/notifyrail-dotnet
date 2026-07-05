@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using NotifyRail.Api.Features.Deliveries.Persistence;
 using NotifyRail.Api.Features.Messages.Persistence;
+using NotifyRail.Api.Features.Otp.Persistence;
 
 namespace NotifyRail.Api.Infrastructure.Persistence;
 
@@ -12,6 +13,8 @@ public sealed class NotifyRailDbContext(DbContextOptions<NotifyRailDbContext> op
     public DbSet<Delivery> Deliveries => Set<Delivery>();
 
     public DbSet<Message> Messages => Set<Message>();
+
+    public DbSet<OtpChallenge> OtpChallenges => Set<OtpChallenge>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

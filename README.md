@@ -24,12 +24,14 @@ The repository currently provides:
 - aggregate message reports with counts for every delivery status
 - idempotent mock-provider callbacks that finalize sent deliveries as delivered
   or failed without regressing terminal states
+- idempotent OTP send with hashed code persistence, delivery expiry, and a mock
+  `debug_code`
+- concurrency-safe one-time OTP verification with TTL and an attempt limit
 
 The mock provider accepts unmatched recipients by default and can apply an
-attempt-by-attempt outcome sequence to configured recipients. Provider
-OTP verification and message summary reads remain planned MVP work. The
-[PRD](docs/prd-notifyrail.md) describes the target MVP, not current
-implementation status.
+attempt-by-attempt outcome sequence to configured recipients. Message summary
+reads remain planned MVP work. The [PRD](docs/prd-notifyrail.md) describes the
+target MVP, not current implementation status.
 
 ## Requirements
 
@@ -91,6 +93,32 @@ background and send them through the mock provider. See the
 [HTTP API reference](docs/reference/http-api.md) for the complete current
 contract.
 
+Create a mock OTP Challenge:
+
+```sh
+curl --request POST http://localhost:5012/otp/send \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "recipient": "+905551111111",
+    "idempotency_key": "login-42"
+  }'
+```
+
+Copy `otp_id` and `debug_code` from the response, then verify once:
+
+```sh
+curl --request POST http://localhost:5012/otp/verify \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "otp_id": "<otp_id>",
+    "code": "<debug_code>"
+  }'
+```
+
+Repeating the verification returns `409 Conflict`. `debug_code` is exposed only
+because the MVP does not send real SMS messages; PostgreSQL stores only its
+hash.
+
 Stop PostgreSQL:
 
 ```sh
@@ -145,6 +173,8 @@ running before executing the full suite.
   attempt history
 - `GET /messages/{message_id}/report`: aggregate delivery status counts
 - `POST /provider-callbacks/mock`: idempotent final delivery status callback
+- `POST /otp/send`: create an OTP Challenge and recipient Delivery
+- `POST /otp/verify`: verify one OTP Code before expiry and attempt exhaustion
 
 ## Documentation
 

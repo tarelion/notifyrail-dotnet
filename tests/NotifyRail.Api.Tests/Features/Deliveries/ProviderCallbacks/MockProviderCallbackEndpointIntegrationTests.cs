@@ -244,7 +244,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
 
         await dbContext.Database.MigrateAsync();
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE delivery_attempts, deliveries, messages;");
+            "TRUNCATE otp_challenges, delivery_attempts, deliveries, messages;");
     }
 
     private sealed record SentDelivery(

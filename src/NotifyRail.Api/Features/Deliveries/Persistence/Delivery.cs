@@ -11,7 +11,8 @@ public sealed class Delivery
     public static Delivery Create(
         Guid messageId,
         string recipient,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        DateTimeOffset? expiresAt = null)
     {
         return new Delivery
         {
@@ -20,6 +21,7 @@ public sealed class Delivery
             Recipient = recipient,
             Status = "queued",
             AttemptCount = 0,
+            ExpiresAt = expiresAt,
             CreatedAt = createdAt,
             UpdatedAt = createdAt,
         };

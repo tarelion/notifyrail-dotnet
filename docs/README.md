@@ -9,6 +9,11 @@ current implementation and local workflow.
 - [NotifyRail PRD](prd-notifyrail.md): target MVP goals, boundaries, user
   stories, and success criteria. It is not an implementation-status page.
 
+## Domain Language
+
+- [NotifyRail domain language](../CONTEXT.md): canonical meanings for Message,
+  Delivery, provider callback, and OTP verification terms.
+
 ## Reference
 
 - [HTTP API](reference/http-api.md): implemented routes, payloads, validation,
@@ -20,10 +25,13 @@ current implementation and local workflow.
   provider adapter contract, mock provider behavior, and result recording.
 - [Persistence model](reference/persistence-model.md): implemented PostgreSQL
   tables, relationships, constraints, and indexes.
+- [OTP verification](reference/otp-verification.md): challenge lifecycle,
+  configuration, hashing, idempotency, and verification rules.
 
 ## Architecture Decisions
 
 - [Global idempotency key for the MVP](adr/0001-global-idempotency-key-for-mvp.md)
+- [Expose the OTP code in the mock send response](adr/0002-expose-otp-code-in-mock-send-response.md)
 
 ## Source-of-Truth Rules
 

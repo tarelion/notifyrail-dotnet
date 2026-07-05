@@ -110,6 +110,6 @@ public sealed class GetMessageReportEndpointIntegrationTests
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE delivery_attempts, deliveries, messages;");
+            "TRUNCATE otp_challenges, delivery_attempts, deliveries, messages;");
     }
 }

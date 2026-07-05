@@ -3,14 +3,15 @@
 ## Purpose
 
 This page defines the PostgreSQL schema currently mapped by EF Core for
-messages, deliveries, and delivery attempts. Migrations remain the executable
-schema history; this page is the canonical human- and agent-readable contract.
+messages, deliveries, delivery attempts, and OTP challenges. Migrations remain
+the executable schema history; this page is the canonical human- and
+agent-readable contract.
 
 ## Scope
 
 - DbContext: `src/NotifyRail.Api/Infrastructure/Persistence/NotifyRailDbContext.cs`
-- Entity mappings: `MessageConfiguration`, `DeliveryConfiguration`, and
-  `DeliveryAttemptConfiguration`
+- Entity mappings: `MessageConfiguration`, `DeliveryConfiguration`,
+  `DeliveryAttemptConfiguration`, and `OtpChallengeConfiguration`
 - Migrations: `src/NotifyRail.Api/Infrastructure/Persistence/Migrations`
 
 ## Relationships
@@ -19,7 +20,9 @@ schema history; this page is the canonical human- and agent-readable contract.
 - Each delivery references one message through `deliveries.message_id`.
 - Each delivery attempt references one delivery through
   `delivery_attempts.delivery_id`.
-- Both foreign keys use `NO ACTION` deletion behavior; deleting a parent does
+- Each OTP challenge references one Message through
+  `otp_challenges.message_id`.
+- All foreign keys use `NO ACTION` deletion behavior; deleting a parent does
   not cascade to its children.
 
 ## `messages`
@@ -56,7 +59,7 @@ Indexes and uniqueness:
 | `claimed_at` | `timestamp with time zone` | no | Required only while status is `processing`. |
 | `claimed_by` | `text` | no | Non-blank worker identity required only while status is `processing`. |
 | `provider_message_id` | `text` | no | Must not be blank when present; unique across non-null values. |
-| `expires_at` | `timestamp with time zone` | no | Delivery expires when this time is reached. Current message intake leaves it null. |
+| `expires_at` | `timestamp with time zone` | no | Delivery expires when this time is reached. Generic message intake leaves it null; OTP send sets it to the challenge expiry. |
 | `created_at` | `timestamp with time zone` | yes | Defaults to `now()`. |
 | `updated_at` | `timestamp with time zone` | yes | Defaults to `now()`. |
 
@@ -98,15 +101,43 @@ Indexes and uniqueness:
 - Unique constraint `delivery_attempts_delivery_id_attempt_number_key` on
   `(delivery_id, attempt_number)`.
 
+## `otp_challenges`
+
+| Column | PostgreSQL type | Required | Contract |
+| --- | --- | --- | --- |
+| `id` | `uuid` | yes | Primary key and public `otp_id`. |
+| `message_id` | `uuid` | yes | Unique reference to the challenge's `otp` Message. |
+| `recipient` | `text` | yes | Non-blank normalized recipient. |
+| `code_hash` | `bytea` | yes | Exactly 32 bytes; plaintext OTP Codes are not persisted. |
+| `expires_at` | `timestamp with time zone` | yes | Must be later than `created_at`. |
+| `verified_at` | `timestamp with time zone` | no | First successful verification instant. |
+| `failed_attempt_count` | `integer` | yes | Between zero and `max_attempts`; defaults to zero. |
+| `max_attempts` | `integer` | yes | Positive verification-attempt limit captured at creation. |
+| `created_at` | `timestamp with time zone` | yes | Challenge creation instant. |
+| `updated_at` | `timestamp with time zone` | yes | Latest verification-state change. |
+
+Indexes and uniqueness:
+
+- Primary key on `id`.
+- Unique index `otp_challenges_message_id_key` on `message_id`.
+- Index `otp_challenges_recipient_expiry_idx` on `(recipient, expires_at)`.
+
+Cross-table OTP invariants:
+
+- OTP send inserts the Message, Delivery, and OTP Challenge in one transaction.
+- The Delivery and OTP Challenge use the same recipient and expiry instant.
+- Verification changes only the OTP Challenge; it does not create a Delivery
+  Attempt or change Delivery status.
+
 ## Cross-Table Invariants
 
-- Message creation inserts one message and all of its deliveries in one
+- Generic Message creation inserts one Message and all of its Deliveries in one
   transaction.
-- A message cannot contain duplicate normalized recipients because
+- A Message cannot contain duplicate normalized recipients because
   `(message_id, recipient)` is unique.
-- Provider-result recording inserts an attempt and updates its delivery in one
+- Provider-result recording inserts an Attempt and updates its Delivery in one
   transaction.
-- `deliveries.attempt_count` equals the number of recorded attempts for that
-  delivery.
+- `deliveries.attempt_count` equals the number of recorded Attempts for that
+  Delivery.
 - Schema changes require an EF Core migration; entity mappings and this
   reference must be updated with the migration.

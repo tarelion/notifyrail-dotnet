@@ -38,6 +38,10 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `DeliveryWorker:BatchSize` | configuration / `DeliveryWorkerOptions.BatchSize` | `1` | `0` uses the default; negative values are invalid. |
 | `DeliveryWorker:PollInterval` | configuration / `DeliveryWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
+| `Otp:Secret` | configuration / `OtpOptions.Secret` | none | Required secret for mock OTP derivation and hashing. |
+| `Otp:SenderTitle` | configuration / `OtpOptions.SenderTitle` | `NotifyRail` | Non-blank OTP sender title. |
+| `Otp:Ttl` | configuration / `OtpOptions.Ttl` | `5m` | Positive OTP Challenge and Delivery lifetime. |
+| `Otp:MaxAttempts` | configuration / `OtpOptions.MaxAttempts` | `5` | Positive incorrect-verification limit. |
 
 ## Provider Adapter Contract
 
