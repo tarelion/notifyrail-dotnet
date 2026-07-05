@@ -25,6 +25,11 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
         options.UseNpgsql(postgresConnectionString));
     builder.Services.Configure<DeliveryWorkerOptions>(
         builder.Configuration.GetSection(DeliveryWorkerOptions.SectionName));
+    builder.Services.AddOptions<DeliveryQueueOptions>()
+        .Bind(builder.Configuration.GetSection(DeliveryQueueOptions.SectionName))
+        .Validate(options => options.BaseRetryDelay > TimeSpan.Zero,
+            "DeliveryQueue:BaseRetryDelay must be greater than zero.")
+        .ValidateOnStart();
     builder.Services.Configure<MockProviderOptions>(
         builder.Configuration.GetSection(MockProviderOptions.SectionName));
     builder.Services.AddOptions<OtpOptions>()

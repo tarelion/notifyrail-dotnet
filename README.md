@@ -1,47 +1,112 @@
 # NotifyRail .NET
 
-NotifyRail is a learning-focused C#/.NET backend that simulates reliable
-notification delivery. This repository is now the active implementation; the
-earlier Go project is the source we are porting from and keeping behaviorally
-aligned with.
+NotifyRail is a backend-focused notification delivery simulator built with
+C#/.NET, PostgreSQL, EF Core, Docker, and xUnit. It demonstrates the kind of
+reliability problems real notification systems need to solve: idempotent intake,
+per-recipient delivery jobs, PostgreSQL-backed queue claiming, retry/backoff,
+provider callbacks, delivery reports, and OTP verification.
 
-## Current Implementation
+![NotifyRail reliable notification delivery backend](infographic/notifyrail-hero/hero.png)
 
-The repository currently provides:
+## Why This Exists
 
-- process liveness and PostgreSQL readiness endpoints
-- atomic message creation with one delivery per recipient
-- globally unique idempotency keys with replay and conflict handling
-- PostgreSQL delivery claiming with scheduling, expiry, priority ordering, and
-  `FOR UPDATE SKIP LOCKED`
-- five-minute lease recovery for deliveries abandoned in `processing`
-- a hosted background worker that sends claimed deliveries through an
-  in-process, recipient-configurable mock provider
-- atomic provider-result recording for `accepted`, `retryable_failure`, and
-  `permanent_failure` outcomes, including `sent`, `retry_scheduled`, and
-  `failed` transitions
-- recipient-level delivery reads with ordered provider attempt history
-- message summary reads with delivery status counts
-- aggregate message reports with counts for every delivery status
-- idempotent mock-provider callbacks that finalize sent deliveries as delivered
-  or failed without regressing terminal states
-- idempotent OTP send with hashed code persistence, delivery expiry, and a mock
-  `debug_code`
-- concurrency-safe one-time OTP verification with TTL and an attempt limit
+Notification platforms must accept message requests, avoid duplicate sends,
+process deliveries asynchronously, handle provider failures, expose delivery
+state, and verify short-lived OTP codes safely.
 
-The mock provider accepts unmatched recipients by default and can apply an
-attempt-by-attempt outcome sequence to configured recipients. The
-[PRD](docs/prd-notifyrail.md) describes the target MVP product requirements.
+NotifyRail does not send real SMS messages. Instead, it implements the backend
+control flow around a configurable mock provider so the delivery lifecycle can be
+observed, tested, and explained without external provider accounts.
+
+## Demo Flow
+
+This demo runs against the real HTTP API and hosted worker. It creates a
+three-recipient campaign, shows accepted, retryable, and permanent provider
+outcomes, applies a provider callback, then sends and verifies an OTP.
+
+![NotifyRail demo flow](docs/assets/demo-flow.gif)
+
+Run the demo locally:
+
+```sh
+./scripts/run-demo-api.sh
+```
+
+In another terminal:
+
+```sh
+./scripts/demo-flow.sh
+```
+
+Regenerate the GIF after changing the script:
+
+```sh
+vhs scripts/demo-flow.tape
+```
+
+## What It Demonstrates
+
+| Area | Implemented behavior |
+| --- | --- |
+| Message intake | `POST /messages` creates one message and one delivery per recipient in one transaction. |
+| Idempotency | Global MVP idempotency keys support safe replay and conflict detection. |
+| Queueing | PostgreSQL claims due deliveries with scheduling, priority ordering, expiry, and `FOR UPDATE SKIP LOCKED`. |
+| Worker processing | A hosted background worker sends claimed deliveries through a mock provider. |
+| Retry/backoff | Retryable provider failures schedule `next_attempt_at`; permanent failures stop immediately. |
+| Attempt history | Every provider send attempt is persisted and exposed through the API. |
+| Provider callbacks | Mock callbacks safely finalize `sent` deliveries without regressing terminal states. |
+| OTP | OTP send is idempotent; verification is hashed, TTL-bound, one-time, and concurrency-safe. |
+| Reporting | Message summary and report endpoints expose aggregate delivery status counts. |
+
+## System Overview
+
+![NotifyRail system overview](infographic/notifyrail-overview/infographic-v2.png)
+
+The API and worker run in the same ASP.NET Core process for the MVP. PostgreSQL
+is both the durable store and the delivery queue. The mock provider can be
+configured per recipient, which makes accepted, retryable, and permanent failure
+paths easy to demonstrate.
+
+## Tech Stack
+
+| Layer | Technology |
+| --- | --- |
+| Runtime | .NET 10 |
+| Web | ASP.NET Core Minimal APIs |
+| Persistence | PostgreSQL, EF Core, Npgsql |
+| Queue | PostgreSQL row locking with `FOR UPDATE SKIP LOCKED` |
+| Background work | ASP.NET Core hosted service |
+| Tests | xUnit integration and unit tests |
+| Local runtime | Docker Compose for PostgreSQL |
+
+## Current API Surface
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Process liveness |
+| `GET /readyz` | PostgreSQL readiness |
+| `POST /messages` | Idempotent message and delivery creation |
+| `GET /messages/{message_id}` | Message metadata and delivery status counts |
+| `GET /messages/{message_id}/deliveries` | Recipient delivery states and attempt history |
+| `GET /messages/{message_id}/report` | Aggregate delivery report |
+| `POST /provider-callbacks/mock` | Mock provider final-status callback |
+| `POST /otp/send` | Create an OTP challenge and recipient delivery |
+| `POST /otp/verify` | Verify one OTP code before expiry and reject reuse |
+
+The canonical HTTP contract is in
+[docs/reference/http-api.md](docs/reference/http-api.md).
 
 ## Requirements
 
 - .NET SDK 10.0.x
 - Docker, for local PostgreSQL
+- `jq`, for the demo script
+- `vhs`, only if you want to regenerate `docs/assets/demo-flow.gif`
 
-On Arch Linux, install the SDK and ASP.NET Core runtime from the official repos:
+On Arch Linux:
 
 ```sh
-sudo pacman -S --needed dotnet-sdk aspnet-runtime aspnet-targeting-pack
+sudo pacman -S --needed dotnet-sdk aspnet-runtime aspnet-targeting-pack docker jq vhs
 ```
 
 ## Run Locally
@@ -65,14 +130,14 @@ Start the API:
 dotnet run --project src/NotifyRail.Api
 ```
 
-In another terminal, check the service:
+Check the service:
 
 ```sh
 curl http://localhost:5012/healthz
 curl http://localhost:5012/readyz
 ```
 
-Create a message and its per-recipient deliveries:
+Create a message:
 
 ```sh
 curl --request POST http://localhost:5012/messages \
@@ -87,13 +152,13 @@ curl --request POST http://localhost:5012/messages \
   }'
 ```
 
-A successful request returns `202 Accepted` with the message ID, delivery count,
-and creation time. The hosted delivery worker will claim due deliveries in the
-background and send them through the mock provider. See the
-[HTTP API reference](docs/reference/http-api.md) for the complete current
-contract.
+A successful request returns `202 Accepted` with a `message_id`. The hosted
+worker then claims due deliveries in the background and sends them through the
+mock provider.
 
-Create a mock OTP Challenge:
+## OTP Example
+
+Create a mock OTP challenge:
 
 ```sh
 curl --request POST http://localhost:5012/otp/send \
@@ -104,7 +169,7 @@ curl --request POST http://localhost:5012/otp/send \
   }'
 ```
 
-Copy `otp_id` and `debug_code` from the response, then verify once:
+Use the returned `otp_id` and `debug_code` once:
 
 ```sh
 curl --request POST http://localhost:5012/otp/verify \
@@ -115,19 +180,31 @@ curl --request POST http://localhost:5012/otp/verify \
   }'
 ```
 
-Repeating the verification returns `409 Conflict`. `debug_code` is exposed only
-because the MVP does not send real SMS messages; PostgreSQL stores only its
-hash.
+Repeating verification returns `409 Conflict`. `debug_code` exists only because
+the MVP does not send real SMS messages; PostgreSQL stores only the code hash.
 
-Stop PostgreSQL:
+## Tests
+
+Run the full suite:
 
 ```sh
-docker compose down
+docker compose up -d --wait postgres
+dotnet test NotifyRail.slnx
 ```
 
-To also delete local PostgreSQL data, use `docker compose down -v`.
+Current validation:
 
-## Development
+```text
+Passed: 70
+Failed: 0
+Skipped: 0
+```
+
+The tests cover message idempotency, delivery queue claiming, priority ordering,
+retry/backoff, stale claim recovery, provider callbacks, delivery reporting, OTP
+TTL, OTP one-time verification, and concurrency-sensitive behavior.
+
+## Development Notes
 
 The API reads PostgreSQL from `ConnectionStrings:Postgres`. The development
 configuration expects:
@@ -145,40 +222,58 @@ dotnet build NotifyRail.slnx
 dotnet test NotifyRail.slnx
 ```
 
-When changing EF models or persistence mappings, create and apply a migration:
+When changing EF models or persistence mappings:
 
 ```sh
 dotnet ef migrations add <MigrationName> --project src/NotifyRail.Api
 dotnet ef database update --project src/NotifyRail.Api
 ```
 
-## Tests
-
-Run the suite:
+Stop PostgreSQL:
 
 ```sh
-docker compose up -d --wait postgres
-dotnet test NotifyRail.slnx
+docker compose down
 ```
 
-The current integration tests use PostgreSQL. Keep the database container
-running before executing the full suite.
+Delete local PostgreSQL data:
 
-## Implemented Endpoints
+```sh
+docker compose down -v
+```
 
-- `GET /healthz`: process liveness
-- `GET /readyz`: PostgreSQL connectivity
-- `POST /messages`: idempotent message and delivery creation
-- `GET /messages/{message_id}`: message metadata and delivery status counts
-- `GET /messages/{message_id}/deliveries`: recipient delivery states and
-  attempt history
-- `GET /messages/{message_id}/report`: aggregate delivery status counts
-- `POST /provider-callbacks/mock`: idempotent final delivery status callback
-- `POST /otp/send`: create an OTP Challenge and recipient Delivery
-- `POST /otp/verify`: verify one OTP Code before expiry and attempt exhaustion
+## Project Structure
+
+| Path | Responsibility |
+| --- | --- |
+| `src/NotifyRail.Api/Program.cs` | Runtime wiring and endpoint registration |
+| `src/NotifyRail.Api/Features/Health` | Liveness and readiness endpoints |
+| `src/NotifyRail.Api/Features/Messages` | Message intake, summaries, delivery reads, and reports |
+| `src/NotifyRail.Api/Features/Deliveries` | Delivery persistence, queue claiming, provider adapter, callbacks, and worker |
+| `src/NotifyRail.Api/Features/Otp` | OTP send, hashing, challenge persistence, and verification |
+| `src/NotifyRail.Api/Infrastructure/Persistence` | EF Core DbContext and migrations |
+| `tests/NotifyRail.Api.Tests` | xUnit integration and unit tests |
+| `docs/reference` | Canonical implemented contracts |
+| `docs/adr` | Architecture decisions |
+| `scripts` | Local demo and GIF generation scripts |
 
 ## Documentation
 
-Start with the [documentation index](docs/README.md). Canonical contracts live
-under `docs/reference/`; product direction lives in the PRD. Existing .NET
-architecture decisions live under `docs/adr/`.
+Start with [docs/README.md](docs/README.md).
+
+- [PRD](docs/prd-notifyrail.md): target MVP goals, boundaries, user stories,
+  and success criteria.
+- [HTTP API reference](docs/reference/http-api.md): implemented routes,
+  payloads, responses, validation, and idempotency behavior.
+- [Delivery processing reference](docs/reference/delivery-processing.md):
+  worker runtime, provider adapter contract, retry behavior, and queue claiming.
+- [Delivery lifecycle reference](docs/reference/delivery-lifecycle.md):
+  canonical states, transitions, invariants, and forbidden transitions.
+- [Persistence model reference](docs/reference/persistence-model.md): tables,
+  constraints, relationships, and indexes.
+- [OTP verification reference](docs/reference/otp-verification.md): OTP
+  challenge lifecycle, hashing, TTL, attempts, and verification rules.
+
+## Status
+
+The core MVP is implemented and test-covered. Planned future work belongs in the
+PRD or issue tracker; stable implemented behavior belongs in `docs/reference/`.

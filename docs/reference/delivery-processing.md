@@ -37,6 +37,7 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `DeliveryWorker:WorkerId` | configuration / `DeliveryWorkerOptions.WorkerId` | `notifyrail-<guid>` | Trimmed non-empty worker identity. |
 | `DeliveryWorker:BatchSize` | configuration / `DeliveryWorkerOptions.BatchSize` | `1` | `0` uses the default; negative values are invalid. |
 | `DeliveryWorker:PollInterval` | configuration / `DeliveryWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
+| `DeliveryQueue:BaseRetryDelay` | configuration / `DeliveryQueueOptions.BaseRetryDelay` | `1m` | Positive base retry delay. Attempt `N` waits `N * BaseRetryDelay`. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 | `Otp:Secret` | configuration / `OtpOptions.Secret` | none | Required secret for mock OTP derivation and hashing. |
 | `Otp:SenderTitle` | configuration / `OtpOptions.SenderTitle` | `NotifyRail` | Non-blank OTP sender title. |
@@ -92,8 +93,9 @@ transient provider exception into a persisted attempt without receiving a
 | `PermanentFailure` | Records an attempt and moves the delivery to `failed`. |
 
 Retryable failures are capped at three attempts. When attempts remain,
-`next_attempt_at` is set to `attempted_at + attempt_number * 1 minute`; a
-retryable failure on the third attempt moves the delivery to `failed`.
+`next_attempt_at` is set to
+`attempted_at + attempt_number * DeliveryQueue:BaseRetryDelay`; a retryable
+failure on the third attempt moves the delivery to `failed`.
 
 Provider adapters must respect cancellation and return promptly when the
 provided cancellation token is canceled.
@@ -265,7 +267,7 @@ Outcome-specific delivery transitions:
 | Outcome | Delivery status | `next_attempt_at` | `provider_message_id` |
 | --- | --- | --- | --- |
 | `Accepted` | `sent` | `NULL` | Provider message ID when provided. |
-| `RetryableFailure` with attempts remaining | `retry_scheduled` | `attempted_at + attempt_number * 1 minute` | `NULL` |
+| `RetryableFailure` with attempts remaining | `retry_scheduled` | `attempted_at + attempt_number * DeliveryQueue:BaseRetryDelay` | `NULL` |
 | `RetryableFailure` on max attempt | `failed` | `NULL` | `NULL` |
 | `PermanentFailure` | `failed` | `NULL` | `NULL` |
 
@@ -274,5 +276,5 @@ the [persistence model reference](persistence-model.md).
 
 ## Current Limits
 
-- The retry policy is not configurable.
+- The retry attempt cap is not configurable.
 - The stale claim lease is not configurable.

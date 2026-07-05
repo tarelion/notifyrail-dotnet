@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Features.Deliveries.Queue;
@@ -7,15 +8,18 @@ public sealed class DeliveryQueue
 {
     private const int MaxAttempts = 3;
 
-    private static readonly TimeSpan BaseRetryDelay = TimeSpan.FromMinutes(1);
-
     private static readonly TimeSpan StaleClaimTimeout = TimeSpan.FromMinutes(5);
 
     private readonly NotifyRailDbContext _dbContext;
 
-    public DeliveryQueue(NotifyRailDbContext dbContext)
+    private readonly TimeSpan _baseRetryDelay;
+
+    public DeliveryQueue(
+        NotifyRailDbContext dbContext,
+        IOptions<DeliveryQueueOptions> options)
     {
         _dbContext = dbContext;
+        _baseRetryDelay = options.Value.BaseRetryDelay;
     }
 
     public async Task<IReadOnlyList<DeliveryJob>> ClaimDueAsync(
@@ -324,9 +328,9 @@ public sealed class DeliveryQueue
         return outcome == ProviderOutcome.RetryableFailure && attemptNumber < MaxAttempts;
     }
 
-    private static TimeSpan RetryDelay(int attemptNumber)
+    private TimeSpan RetryDelay(int attemptNumber)
     {
-        return attemptNumber * BaseRetryDelay;
+        return attemptNumber * _baseRetryDelay;
     }
 
     private sealed class ClaimedDeliveryRow
