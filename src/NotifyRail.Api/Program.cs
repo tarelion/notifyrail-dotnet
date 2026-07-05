@@ -6,6 +6,7 @@ using NotifyRail.Api.Features.Deliveries.Queue;
 using NotifyRail.Api.Features.Deliveries.Worker;
 using NotifyRail.Api.Features.Health;
 using NotifyRail.Api.Features.Messages.CreateMessage;
+using NotifyRail.Api.Features.Messages.GetMessage;
 using NotifyRail.Api.Features.Messages.GetMessageDeliveries;
 using NotifyRail.Api.Features.Messages.GetMessageReport;
 using NotifyRail.Api.Features.Otp;
@@ -44,6 +45,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddScoped<MockProviderCallbackHandler>();
     builder.Services.AddHostedService<DeliveryWorkerBackgroundService>();
     builder.Services.AddScoped<MessageIntake>();
+    builder.Services.AddScoped<MessageSummaryReader>();
     builder.Services.AddScoped<MessageDeliveryReader>();
     builder.Services.AddScoped<MessageReportReader>();
     builder.Services.AddSingleton<OtpCode>();
@@ -55,6 +57,7 @@ var app = builder.Build();
 
 app.MapHealthEndpoints();
 app.MapCreateMessageEndpoint();
+app.MapGetMessageEndpoint();
 app.MapGetMessageDeliveriesEndpoint();
 app.MapGetMessageReportEndpoint();
 app.MapMockProviderCallbackEndpoint();

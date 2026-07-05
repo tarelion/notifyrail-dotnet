@@ -11,6 +11,8 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 - Health endpoints: `src/NotifyRail.Api/Features/Health`
 - Message endpoint: `src/NotifyRail.Api/Features/Messages/CreateMessage`
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
+- Message summary endpoint:
+  `src/NotifyRail.Api/Features/Messages/GetMessage`
 - Message delivery endpoint:
   `src/NotifyRail.Api/Features/Messages/GetMessageDeliveries`
 - Message report endpoint:
@@ -127,6 +129,85 @@ curl --request POST http://localhost:5012/messages \
     "recipients": ["+905551111111", "+905552222222"],
     "idempotency_key": "order-42-ready"
   }'
+```
+
+## `GET /messages/{message_id}`
+
+Returns message metadata together with aggregate delivery status counts.
+`message_id` must be a UUID. The endpoint does not return individual
+recipient deliveries or provider attempt history; use
+`GET /messages/{message_id}/deliveries` for that detail.
+
+### Success Response
+
+- Status: `200 OK`
+
+```json
+{
+  "message_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "type": "transactional",
+  "channel": "sms",
+  "sender_title": "NotifyRail",
+  "body": "Your order is ready.",
+  "scheduled_at": null,
+  "report_label": "orders",
+  "encoding": "unicode",
+  "created_at": "2026-06-30T12:00:00Z",
+  "updated_at": "2026-06-30T12:00:00Z",
+  "deliveries": {
+    "total": 2,
+    "queued": 1,
+    "processing": 0,
+    "sent": 1,
+    "delivered": 0,
+    "retry_scheduled": 0,
+    "failed": 0,
+    "expired": 0
+  }
+}
+```
+
+### Message Fields
+
+| Field | JSON type | Nullable | Contract |
+| --- | --- | --- | --- |
+| `message_id` | string UUID | no | Identifies the Message. |
+| `type` | string | no | One of `otp`, `transactional`, or `campaign`. |
+| `channel` | string | no | Current MVP value is `sms`. |
+| `sender_title` | string | no | Normalized sender label stored at creation. |
+| `body` | string | no | Message body stored at creation. |
+| `scheduled_at` | RFC 3339 timestamp | yes | Earliest delivery claim time when scheduled. |
+| `report_label` | string | yes | Optional client-provided reporting label. |
+| `encoding` | string | yes | Optional encoding value stored at creation. |
+| `created_at` | RFC 3339 timestamp | no | Message creation instant. |
+| `updated_at` | RFC 3339 timestamp | no | Latest message metadata update instant. |
+| `deliveries` | object | no | Aggregate status counts for recipient deliveries. |
+
+### Delivery Summary Fields
+
+| Field | JSON type | Contract |
+| --- | --- | --- |
+| `total` | integer | Number of all recipient deliveries. |
+| `queued` | integer | Deliveries waiting to be claimed. |
+| `processing` | integer | Deliveries currently claimed by a worker. |
+| `sent` | integer | Deliveries accepted by the provider without a final callback. |
+| `delivered` | integer | Deliveries confirmed as delivered. |
+| `retry_scheduled` | integer | Deliveries waiting for their next attempt. |
+| `failed` | integer | Deliveries in terminal failure. |
+| `expired` | integer | Deliveries in terminal expiry. |
+
+All delivery summary fields are present even when their count is zero. `total`
+equals the sum of `queued`, `processing`, `sent`, `delivered`,
+`retry_scheduled`, `failed`, and `expired`.
+
+### Error Response
+
+If no message has the requested UUID:
+
+- Status: `404 Not Found`
+
+```json
+{"error":"message not found"}
 ```
 
 ## `GET /messages/{message_id}/deliveries`

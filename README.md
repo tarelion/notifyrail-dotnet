@@ -21,6 +21,7 @@ The repository currently provides:
   `permanent_failure` outcomes, including `sent`, `retry_scheduled`, and
   `failed` transitions
 - recipient-level delivery reads with ordered provider attempt history
+- message summary reads with delivery status counts
 - aggregate message reports with counts for every delivery status
 - idempotent mock-provider callbacks that finalize sent deliveries as delivered
   or failed without regressing terminal states
@@ -29,9 +30,8 @@ The repository currently provides:
 - concurrency-safe one-time OTP verification with TTL and an attempt limit
 
 The mock provider accepts unmatched recipients by default and can apply an
-attempt-by-attempt outcome sequence to configured recipients. Message summary
-reads remain planned MVP work. The [PRD](docs/prd-notifyrail.md) describes the
-target MVP, not current implementation status.
+attempt-by-attempt outcome sequence to configured recipients. The
+[PRD](docs/prd-notifyrail.md) describes the target MVP product requirements.
 
 ## Requirements
 
@@ -169,6 +169,7 @@ running before executing the full suite.
 - `GET /healthz`: process liveness
 - `GET /readyz`: PostgreSQL connectivity
 - `POST /messages`: idempotent message and delivery creation
+- `GET /messages/{message_id}`: message metadata and delivery status counts
 - `GET /messages/{message_id}/deliveries`: recipient delivery states and
   attempt history
 - `GET /messages/{message_id}/report`: aggregate delivery status counts
