@@ -83,6 +83,9 @@ capabilities.
 - Unknown provider message IDs must be rejected or recorded separately for
   investigation.
 - Callbacks must not move terminal states backward.
+- The implemented mock callback uses first-terminal-result-wins semantics:
+  once a delivery is `delivered`, `failed`, or `expired`, later callbacks are
+  no-ops and return the persisted terminal state.
 
 ## OTP-Specific Rules
 

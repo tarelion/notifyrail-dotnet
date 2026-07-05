@@ -22,11 +22,13 @@ The repository currently provides:
   `failed` transitions
 - recipient-level delivery reads with ordered provider attempt history
 - aggregate message reports with counts for every delivery status
+- idempotent mock-provider callbacks that finalize sent deliveries as delivered
+  or failed without regressing terminal states
 
 The mock provider accepts unmatched recipients by default and can apply an
 attempt-by-attempt outcome sequence to configured recipients. Provider
-callbacks, OTP verification, and message summary reads remain planned MVP work.
-The [PRD](docs/prd-notifyrail.md) describes the target MVP, not current
+OTP verification and message summary reads remain planned MVP work. The
+[PRD](docs/prd-notifyrail.md) describes the target MVP, not current
 implementation status.
 
 ## Requirements
@@ -142,6 +144,7 @@ running before executing the full suite.
 - `GET /messages/{message_id}/deliveries`: recipient delivery states and
   attempt history
 - `GET /messages/{message_id}/report`: aggregate delivery status counts
+- `POST /provider-callbacks/mock`: idempotent final delivery status callback
 
 ## Documentation
 

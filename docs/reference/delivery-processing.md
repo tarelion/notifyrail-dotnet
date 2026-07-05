@@ -12,6 +12,8 @@ how the mock provider behaves, and how provider outcomes are recorded.
 - Queue module: `src/NotifyRail.Api/Features/Deliveries/Queue`
 - Worker module: `src/NotifyRail.Api/Features/Deliveries/Worker`
 - Provider contract: `src/NotifyRail.Api/Features/Deliveries/Providers`
+- Provider callback module:
+  `src/NotifyRail.Api/Features/Deliveries/ProviderCallbacks/Mock`
 - Delivery persistence: `src/NotifyRail.Api/Features/Deliveries/Persistence`
 - EF Core migrations:
   `src/NotifyRail.Api/Infrastructure/Persistence/Migrations`
@@ -148,6 +150,29 @@ The same idempotency key always produces the same provider message ID. Different
 attempt numbers produce different keys and therefore different provider message
 IDs.
 
+## Mock Provider Callback Processing
+
+`POST /provider-callbacks/mock` passes a normalized provider message ID and
+terminal status to `MockProviderCallbackHandler`.
+
+The handler performs a conditional PostgreSQL update:
+
+1. Match the unique `deliveries.provider_message_id`.
+2. Update only when the current delivery status is `sent`.
+3. Move the delivery to `delivered` or `failed` and set `updated_at` to the
+   server callback-processing time.
+4. Read and return the persisted delivery state.
+
+The conditional update makes callback processing state-idempotent without a
+separate callback event table. Duplicate callbacks do not update `updated_at`.
+A callback received after `delivered`, `failed`, or `expired` returns the
+existing state without changing it. For conflicting final callbacks, the first
+terminal transition wins.
+
+An unknown provider message ID returns `404 Not Found`. Callback processing
+does not insert a delivery attempt because a provider callback finalizes a
+previous send; it is not another provider send attempt.
+
 ## Worker Processing Flow
 
 `DeliveryWorkerBackgroundService` repeats this loop until the host stops:
@@ -245,6 +270,5 @@ the [persistence model reference](persistence-model.md).
 
 ## Current Limits
 
-- Provider callbacks are not wired yet.
 - The retry policy is not configurable.
 - The stale claim lease is not configurable.

@@ -15,6 +15,8 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
   `src/NotifyRail.Api/Features/Messages/GetMessageDeliveries`
 - Message report endpoint:
   `src/NotifyRail.Api/Features/Messages/GetMessageReport`
+- Mock provider callback endpoint:
+  `src/NotifyRail.Api/Features/Deliveries/ProviderCallbacks/Mock`
 
 Responses explicitly produced by the registered handlers use JSON payloads.
 Unhandled failures are delegated to ASP.NET Core and do not currently have an
@@ -203,6 +205,68 @@ If no message has the requested UUID:
 ```json
 {"error":"message not found"}
 ```
+
+## `POST /provider-callbacks/mock`
+
+Applies a final mock-provider status to the delivery identified by
+`provider_message_id`.
+
+### Request Body
+
+| Field | JSON type | Required | Contract |
+| --- | --- | --- | --- |
+| `provider_message_id` | string | yes | Non-blank provider message ID returned by an accepted mock send. Leading and trailing whitespace is removed. |
+| `status` | string | yes | One of `delivered` or `failed`. Leading and trailing whitespace is removed. |
+
+```json
+{
+  "provider_message_id": "mock_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "status": "delivered"
+}
+```
+
+### Success Response
+
+- Status: `200 OK`
+
+```json
+{
+  "delivery_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
+  "provider_message_id": "mock_e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "status": "delivered",
+  "updated_at": "2026-06-30T12:05:00Z"
+}
+```
+
+The response reports the persisted delivery state. A callback updates only a
+delivery currently in `sent`:
+
+| Persisted status | Callback status | Result |
+| --- | --- | --- |
+| `sent` | `delivered` | Delivery moves to `delivered`; `updated_at` changes. |
+| `sent` | `failed` | Delivery moves to `failed`; `updated_at` changes. |
+| `delivered`, `failed`, or `expired` | either value | No state or timestamp change; response returns the existing terminal state. |
+
+Duplicate callbacks therefore return the same delivery state and timestamp.
+When conflicting callbacks race, the first terminal transition wins and later
+callbacks are no-ops.
+
+### Error Responses
+
+Errors explicitly produced by the endpoint use this shape:
+
+```json
+{"error":"description"}
+```
+
+| Status | Body | Condition |
+| --- | --- | --- |
+| `400 Bad Request` | `{"error":"provider_message_id is required"}` | Provider message ID is null, empty, or whitespace. |
+| `400 Bad Request` | `{"error":"status must be one of: delivered, failed"}` | Status is absent or unsupported. |
+| `404 Not Found` | `{"error":"provider message not found"}` | No delivery has the provider message ID. |
+
+Malformed JSON and missing request bodies are rejected by ASP.NET Core and do
+not currently have an application-level JSON error contract.
 
 ## `GET /messages/{message_id}/report`
 

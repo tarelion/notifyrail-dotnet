@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
+using NotifyRail.Api.Features.Deliveries.ProviderCallbacks.Mock;
 using NotifyRail.Api.Features.Deliveries.Providers;
 using NotifyRail.Api.Features.Deliveries.Queue;
 using NotifyRail.Api.Features.Deliveries.Worker;
@@ -26,6 +27,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddSingleton<IProviderSender, MockProvider>();
     builder.Services.AddScoped<DeliveryQueue>();
     builder.Services.AddScoped<DeliveryWorker>();
+    builder.Services.AddScoped<MockProviderCallbackHandler>();
     builder.Services.AddHostedService<DeliveryWorkerBackgroundService>();
     builder.Services.AddScoped<MessageIntake>();
     builder.Services.AddScoped<MessageDeliveryReader>();
@@ -38,6 +40,7 @@ app.MapHealthEndpoints();
 app.MapCreateMessageEndpoint();
 app.MapGetMessageDeliveriesEndpoint();
 app.MapGetMessageReportEndpoint();
+app.MapMockProviderCallbackEndpoint();
 
 app.Run();
 
