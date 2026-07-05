@@ -6,6 +6,8 @@ namespace NotifyRail.Api.Features.Deliveries.Providers;
 
 public sealed class MockProvider : IProviderSender
 {
+    public string Name => "mock";
+
     public Task<ProviderResult> SendAsync(
         ProviderRequest request,
         CancellationToken cancellationToken)
@@ -29,7 +31,7 @@ public sealed class MockProvider : IProviderSender
         return Task.FromResult(
             new ProviderResult(
                 ProviderOutcome.Accepted,
-                Provider: "mock",
+                Provider: Name,
                 ProviderMessageId: providerMessageId));
     }
 }

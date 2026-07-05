@@ -6,16 +6,19 @@ public sealed class DeliveryWorkerBackgroundService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<DeliveryWorkerBackgroundService> _logger;
     private readonly TimeSpan _pollInterval;
 
     public DeliveryWorkerBackgroundService(
         IServiceScopeFactory scopeFactory,
         IOptions<DeliveryWorkerOptions> options,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILogger<DeliveryWorkerBackgroundService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(logger);
 
         if (options.Value.PollInterval < TimeSpan.Zero)
         {
@@ -27,6 +30,7 @@ public sealed class DeliveryWorkerBackgroundService : BackgroundService
 
         _scopeFactory = scopeFactory;
         _timeProvider = timeProvider;
+        _logger = logger;
         _pollInterval = options.Value.PollInterval == TimeSpan.Zero
             ? DeliveryWorkerOptions.DefaultPollInterval
             : options.Value.PollInterval;
@@ -36,7 +40,21 @@ public sealed class DeliveryWorkerBackgroundService : BackgroundService
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            await ProcessBatchAsync(stoppingToken);
+            try
+            {
+                await ProcessBatchAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(
+                    exception,
+                    "Delivery batch failed; polling will continue");
+            }
+
             await Task.Delay(_pollInterval, _timeProvider, stoppingToken);
         }
     }

@@ -43,11 +43,17 @@ Provider adapters implement:
 ```csharp
 public interface IProviderSender
 {
+    string Name { get; }
+
     Task<ProviderResult> SendAsync(
         ProviderRequest request,
         CancellationToken cancellationToken);
 }
 ```
+
+`Name` is the stable provider identifier used when the worker must turn a
+transient provider exception into a persisted attempt without receiving a
+`ProviderResult`.
 
 ### Request Fields
 
@@ -122,9 +128,14 @@ IDs.
 3. Record the provider result using
    `DeliveryQueue.RecordProviderResultAsync`.
 
-If a queue operation, provider send, or provider-result recording throws, the
-hosted service fails and the ASP.NET Core host handles the background service
-failure according to host settings.
+`HttpRequestException` and `TimeoutException` from a provider send are recorded
+as retryable failures with error code `provider_exception`; they do not escape
+the batch. Host cancellation continues to propagate normally.
+
+If another queue, provider, or provider-result recording error escapes a batch,
+the hosted service logs it, waits for the configured poll interval, and starts
+a new batch in a new dependency-injection scope. One unexpected batch failure
+therefore does not terminate the hosted worker or the ASP.NET Core host.
 
 `attempted_at` is captured after the provider call returns, immediately before
 the provider result is recorded.
