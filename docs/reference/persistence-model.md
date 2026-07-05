@@ -34,7 +34,7 @@ schema history; this page is the canonical human- and agent-readable contract.
 | `idempotency_key` | `text` | yes | Must not be blank after trimming; globally unique for the MVP. |
 | `report_label` | `text` | no | Client-provided reporting label. |
 | `encoding` | `text` | no | When present, one of `latin`, `turkish`, or `unicode`. |
-| `scheduled_at` | `timestamp with time zone` | no | Earliest time at which queued deliveries may be claimed. |
+| `scheduled_at` | `timestamp with time zone` | no | UTC-normalized earliest instant at which queued deliveries may be claimed. |
 | `created_at` | `timestamp with time zone` | yes | Defaults to `now()`. |
 | `updated_at` | `timestamp with time zone` | yes | Defaults to `now()`. |
 

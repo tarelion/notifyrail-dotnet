@@ -94,6 +94,43 @@ public sealed class CreateMessageEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task CreateMessage_PersistsScheduledAtAsUtc_WhenRequestUsesNonUtcOffset()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = _factory.CreateClient();
+        var scheduledAt = new DateTimeOffset(
+            2026,
+            7,
+            6,
+            15,
+            30,
+            0,
+            TimeSpan.FromHours(3));
+        var request = ValidRequest($"scheduled-offset-{Guid.NewGuid()}") with
+        {
+            ScheduledAt = scheduledAt,
+        };
+
+        using var response = await client.PostAsJsonAsync("/messages", request);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+
+        var receipt = await response.Content.ReadFromJsonAsync<CreateMessageResponse>();
+        Assert.NotNull(receipt);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        var persistedScheduledAt = await dbContext.Messages
+            .AsNoTracking()
+            .Where(message => message.Id == receipt.MessageId)
+            .Select(message => message.ScheduledAt)
+            .SingleAsync();
+
+        Assert.Equal(scheduledAt.ToUniversalTime(), persistedScheduledAt);
+        Assert.Equal(TimeSpan.Zero, persistedScheduledAt!.Value.Offset);
+    }
+
+    [Fact]
     public async Task CreateMessage_ReturnsBadRequest_WhenDuplicateRecipientsMatchAfterTrim()
     {
         await EnsureDatabaseReadyAsync();

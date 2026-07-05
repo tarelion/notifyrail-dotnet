@@ -54,7 +54,7 @@ Atomically creates one message and one delivery for each recipient.
 | `body` | string | yes | Must contain at least one non-whitespace character. |
 | `recipients` | array of strings | yes | Must contain at least one non-empty, unique recipient. Values are trimmed before storage. |
 | `idempotency_key` | string | yes | Trimmed before storage; globally unique for the MVP. |
-| `scheduled_at` | RFC 3339 timestamp or `null` | no | Stored with the message. A due-delivery claim will not select it before this time. |
+| `scheduled_at` | RFC 3339 timestamp or `null` | no | Normalized to UTC before storage. A due-delivery claim will not select it before this instant. |
 | `report_label` | string or `null` | no | Trimmed before storage. |
 | `encoding` | string or `null` | no | When present, one of `latin`, `turkish`, or `unicode`. |
 

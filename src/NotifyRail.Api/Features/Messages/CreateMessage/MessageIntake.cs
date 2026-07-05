@@ -22,6 +22,9 @@ public sealed class MessageIntake
         CancellationToken cancellationToken)
     {
         var createdAt = TruncateToMicrosecond(DateTimeOffset.UtcNow);
+        var scheduledAt = command.ScheduledAt is null
+            ? (DateTimeOffset?)null
+            : TruncateToMicrosecond(command.ScheduledAt.Value);
 
         var message = Message.Create(
             command.Type,
@@ -30,7 +33,7 @@ public sealed class MessageIntake
             command.Body,
             command.IdempotencyKey,
             createdAt,
-            command.ScheduledAt,
+            scheduledAt,
             command.ReportLabel,
             command.Encoding);
 
