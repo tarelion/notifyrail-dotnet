@@ -6,6 +6,7 @@ using NotifyRail.Api.Features.Deliveries.Worker;
 using NotifyRail.Api.Features.Health;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Features.Messages.GetMessageDeliveries;
+using NotifyRail.Api.Features.Messages.GetMessageReport;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,6 +27,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddHostedService<DeliveryWorkerBackgroundService>();
     builder.Services.AddScoped<MessageIntake>();
     builder.Services.AddScoped<MessageDeliveryReader>();
+    builder.Services.AddScoped<MessageReportReader>();
 }
 
 var app = builder.Build();
@@ -33,6 +35,7 @@ var app = builder.Build();
 app.MapHealthEndpoints();
 app.MapCreateMessageEndpoint();
 app.MapGetMessageDeliveriesEndpoint();
+app.MapGetMessageReportEndpoint();
 
 app.Run();
 

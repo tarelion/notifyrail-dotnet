@@ -13,6 +13,8 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
 - Message delivery endpoint:
   `src/NotifyRail.Api/Features/Messages/GetMessageDeliveries`
+- Message report endpoint:
+  `src/NotifyRail.Api/Features/Messages/GetMessageReport`
 
 Responses explicitly produced by the registered handlers use JSON payloads.
 Unhandled failures are delegated to ASP.NET Core and do not currently have an
@@ -191,6 +193,58 @@ each delivery are ordered by `attempt_number`.
 | `error_code` | string | yes | Normalized provider error code. |
 | `error_message` | string | yes | Provider error detail. |
 | `attempted_at` | RFC 3339 timestamp | no | Instant the provider result was recorded. |
+
+### Error Response
+
+If no message has the requested UUID:
+
+- Status: `404 Not Found`
+
+```json
+{"error":"message not found"}
+```
+
+## `GET /messages/{message_id}/report`
+
+Returns aggregate delivery counts for a message. `message_id` must be a UUID.
+The endpoint calculates counts in PostgreSQL and does not return individual
+delivery or attempt records.
+
+### Success Response
+
+- Status: `200 OK`
+
+```json
+{
+  "message_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "total": 100,
+  "queued": 5,
+  "processing": 2,
+  "sent": 20,
+  "delivered": 65,
+  "retry_scheduled": 3,
+  "failed": 4,
+  "expired": 1
+}
+```
+
+All status fields are present even when their count is zero. `total` equals the
+sum of `queued`, `processing`, `sent`, `delivered`, `retry_scheduled`, `failed`,
+and `expired`.
+
+### Response Fields
+
+| Field | JSON type | Contract |
+| --- | --- | --- |
+| `message_id` | string UUID | Identifies the reported message. |
+| `total` | integer | Number of all recipient deliveries. |
+| `queued` | integer | Deliveries waiting to be claimed. |
+| `processing` | integer | Deliveries currently claimed by a worker. |
+| `sent` | integer | Deliveries accepted by the provider without a final callback. |
+| `delivered` | integer | Deliveries confirmed as delivered. |
+| `retry_scheduled` | integer | Deliveries waiting for their next attempt. |
+| `failed` | integer | Deliveries in terminal failure. |
+| `expired` | integer | Deliveries in terminal expiry. |
 
 ### Error Response
 

@@ -21,10 +21,11 @@ The repository currently provides:
   `permanent_failure` outcomes, including `sent`, `retry_scheduled`, and
   `failed` transitions
 - recipient-level delivery reads with ordered provider attempt history
+- aggregate message reports with counts for every delivery status
 
 The mock provider currently accepts every valid send. Provider callbacks, OTP
-verification, aggregate reports, and message summary reads remain planned MVP
-work. The [PRD](docs/prd-notifyrail.md) describes the target MVP, not current
+verification, and message summary reads remain planned MVP work. The
+[PRD](docs/prd-notifyrail.md) describes the target MVP, not current
 implementation status.
 
 ## Requirements
@@ -139,6 +140,7 @@ running before executing the full suite.
 - `POST /messages`: idempotent message and delivery creation
 - `GET /messages/{message_id}/deliveries`: recipient delivery states and
   attempt history
+- `GET /messages/{message_id}/report`: aggregate delivery status counts
 
 ## Documentation
 
