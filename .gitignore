@@ -7,7 +7,6 @@ TestResults/
 *.sln.docstates
 
 .idea/
-.agents/
 .vs/
 .vscode/
 
