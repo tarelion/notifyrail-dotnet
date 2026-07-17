@@ -53,12 +53,14 @@ migration creates it and does not create an API Key for it.
 | `verification_hash` | `bytea` | yes | 32-byte SHA-256 verification value; never plaintext. |
 | `display_prefix` | `text` | yes | Non-secret prefix safe for operator display. |
 | `created_at` | `timestamp with time zone` | yes | Credential creation instant. |
-| `last_used_at` | `timestamp with time zone` | no | Most recent authenticated use when tracked. |
+| `last_used_at` | `timestamp with time zone` | no | Most recent successful authenticated use. Failed authentication does not update it. |
 | `expires_at` | `timestamp with time zone` | no | Optional expiry instant. |
-| `revoked_at` | `timestamp with time zone` | no | Irreversible revocation instant. |
+| `revoked_at` | `timestamp with time zone` | no | Irreversible first revocation instant; repeated revocation preserves it. |
 
 Full API Keys have the recognizable `nrk_<lookup_id>_<secret>` form. Only the
 creation response exposes the full value; no plaintext column exists.
+Expired and revoked keys cannot authenticate. Multiple other active keys may
+remain usable for the same enabled API Client.
 
 Indexes and uniqueness:
 

@@ -62,14 +62,18 @@ Success response:
 {
   "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
   "name": "Shipping Service",
+  "api_key_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
   "api_key": "nrk_<lookup_id>_<secret>",
+  "display_prefix": "nrk_<prefix>",
   "created_at": "2026-07-17T12:00:00Z"
 }
 ```
 
-`api_key` is returned only by this creation operation. NotifyRail persists its
-lookup identifier, SHA-256 verification value, and display-safe prefix, not the
-plaintext credential.
+`api_key` is returned only by this creation operation. `api_key_id` identifies
+the credential independently, and `display_prefix` is safe to show when the
+secret is no longer available. NotifyRail persists its lookup identifier,
+SHA-256 verification value, and display-safe prefix, not the plaintext
+credential.
 
 | Status | Condition |
 | --- | --- |
@@ -86,6 +90,87 @@ idempotent. Requires the `Operator` policy.
 | `204 No Content` | The API Client exists and is disabled. |
 | `401 Unauthorized` | The Operator credential is missing or invalid. |
 | `404 Not Found` | The API Client does not exist. |
+
+## `POST /management/api-clients/{api_client_id}/api-keys`
+
+Creates an additional API Key for an API Client. Requires the `Operator`
+policy. More than one non-expired, non-revoked key may be active at once so a
+client can rotate credentials without downtime.
+
+Request:
+
+```json
+{"expires_at":"2026-08-17T12:00:00Z"}
+```
+
+`expires_at` is optional and may be `null`.
+
+Success response:
+
+- Status: `201 Created`
+- Location:
+  `/management/api-clients/{api_client_id}/api-keys/{api_key_id}`
+
+```json
+{
+  "api_key_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
+  "api_key": "nrk_<lookup_id>_<secret>",
+  "display_prefix": "nrk_<prefix>",
+  "created_at": "2026-07-17T12:00:00Z",
+  "expires_at": "2026-08-17T12:00:00Z"
+}
+```
+
+The full `api_key` appears only in this response. Later reads expose the stable
+`api_key_id` and display-safe metadata.
+
+| Status | Condition |
+| --- | --- |
+| `401 Unauthorized` | The Operator credential is missing or invalid, including when an API Key is supplied instead. |
+| `404 Not Found` | The API Client does not exist. |
+
+## `GET /management/api-clients/{api_client_id}/api-keys`
+
+Lists API Key metadata for an API Client. Requires the `Operator` policy and
+never returns a full credential or verification hash.
+
+```json
+{
+  "api_keys": [
+    {
+      "api_key_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
+      "display_prefix": "nrk_<prefix>",
+      "created_at": "2026-07-17T12:00:00Z",
+      "last_used_at": "2026-07-17T12:05:00Z",
+      "expires_at": "2026-08-17T12:00:00Z",
+      "revoked_at": null
+    }
+  ]
+}
+```
+
+Keys are ordered by `created_at` and then `api_key_id`.
+
+| Status | Condition |
+| --- | --- |
+| `200 OK` | The API Client exists. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+| `404 Not Found` | The API Client does not exist. |
+
+## `POST /management/api-clients/{api_client_id}/api-keys/{api_key_id}/revoke`
+
+Permanently revokes one API Key without affecting other keys for the same API
+Client. Repeating the operation is idempotent and preserves the original
+`revoked_at` value. Requires the `Operator` policy.
+
+| Status | Condition |
+| --- | --- |
+| `204 No Content` | The API Key exists under the API Client and is revoked. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+| `404 Not Found` | The API Client/API Key combination does not exist. |
+
+An API Key fails authentication when its expiry time has been reached or it has
+been revoked. Failed authentication does not update `last_used_at`.
 
 ## `GET /healthz`
 
