@@ -6,12 +6,15 @@ namespace NotifyRail.Api.Features.Messages.GetMessageReport;
 public sealed class MessageReportReader(NotifyRailDbContext dbContext)
 {
     public async Task<GetMessageReportResponse?> ReadAsync(
+        Guid apiClientId,
         Guid messageId,
         CancellationToken cancellationToken)
     {
         var messageExists = await dbContext.Messages
             .AsNoTracking()
-            .AnyAsync(message => message.Id == messageId, cancellationToken);
+            .AnyAsync(
+                message => message.ApiClientId == apiClientId && message.Id == messageId,
+                cancellationToken);
         if (!messageExists)
         {
             return null;

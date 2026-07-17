@@ -1,10 +1,13 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NotifyRail.Api.Features.Deliveries.Worker;
+using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Infrastructure.Persistence;
 
@@ -13,12 +16,17 @@ namespace NotifyRail.Api.Tests;
 public sealed class GetMessageEndpointIntegrationTests
     : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
+    private const string OperatorCredential = "get-message-test-operator-credential";
+
     private readonly WebApplicationFactory<Program> _factory;
 
     public GetMessageEndpointIntegrationTests(
         WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithoutHostedServices()
+            .WithWebHostBuilder(builder =>
+                builder.UseSetting("Authentication:Operator:Credential", OperatorCredential));
     }
 
     public void Dispose()
@@ -27,12 +35,22 @@ public sealed class GetMessageEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task GetMessage_ReturnsUnauthorized_WhenApiKeyIsMissing()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task GetMessage_ReturnsMessageSummary()
     {
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var scheduledAt = DateTimeOffset.UtcNow.AddMinutes(10);
         var receipt = await CreateMessageAsync(
             client,
@@ -75,7 +93,7 @@ public sealed class GetMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var receipt = await CreateMessageAsync(
             client,
             DateTimeOffset.UtcNow,
@@ -113,12 +131,30 @@ public sealed class GetMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 
         using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
         Assert.Equal("message not found", body.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task GetMessage_ReturnsNotFound_ForAnotherApiClientsMessage()
+    {
+        await EnsureDatabaseReadyAsync();
+        await ResetDatabaseAsync();
+
+        using var ownerClient = await CreateAuthenticatedClientAsync();
+        using var otherClient = await CreateAuthenticatedClientAsync();
+        var receipt = await CreateMessageAsync(
+            ownerClient,
+            DateTimeOffset.UtcNow,
+            ["+905551111111"]);
+
+        using var response = await otherClient.GetAsync($"/messages/{receipt.MessageId}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private static async Task<CreateMessageResponse> CreateMessageAsync(
@@ -150,6 +186,24 @@ public sealed class GetMessageEndpointIntegrationTests
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         await dbContext.Database.MigrateAsync();
+    }
+
+    private async Task<HttpClient> CreateAuthenticatedClientAsync()
+    {
+        using var operatorClient = _factory.CreateClient();
+        operatorClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Operator", OperatorCredential);
+        using var response = await operatorClient.PostAsJsonAsync(
+            "/management/api-clients",
+            new { name = $"Get Message {Guid.NewGuid()}" });
+        response.EnsureSuccessStatusCode();
+        var apiClient = await response.Content.ReadFromJsonAsync<CreateApiClientResponse>();
+        Assert.NotNull(apiClient);
+
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("ApiKey", apiClient.ApiKey);
+        return client;
     }
 
     private async Task ResetDatabaseAsync()
