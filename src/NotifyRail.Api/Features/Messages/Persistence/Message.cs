@@ -7,6 +7,7 @@ public sealed class Message
     }
 
     public static Message Create(
+        Guid apiClientId,
         string type,
         string channel,
         string senderTitle,
@@ -20,6 +21,7 @@ public sealed class Message
         return new Message
         {
             Id = Guid.NewGuid(),
+            ApiClientId = apiClientId,
             Type = type,
             Channel = channel,
             SenderTitle = senderTitle,
@@ -34,6 +36,8 @@ public sealed class Message
     }
 
     public Guid Id { get; private set; }
+
+    public Guid ApiClientId { get; private set; }
 
     public string Type { get; private set; } = null!;
 

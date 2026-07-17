@@ -9,6 +9,7 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 
 - Runtime wiring: `src/NotifyRail.Api/Program.cs`
 - Health endpoints: `src/NotifyRail.Api/Features/Health`
+- Management API Client endpoints: `src/NotifyRail.Api/Features/ApiClients`
 - Message endpoint: `src/NotifyRail.Api/Features/Messages/CreateMessage`
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
 - Message summary endpoint:
@@ -25,6 +26,65 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 Responses explicitly produced by the registered handlers use JSON payloads.
 Unhandled failures are delegated to ASP.NET Core and do not currently have an
 application-level JSON contract.
+
+## Authentication
+
+NotifyRail registers separate replaceable authentication schemes and policies:
+
+| Identity | Authorization header | Policy | Current routes |
+| --- | --- | --- | --- |
+| Operator | `Authorization: Operator <credential>` | `Operator` | `/management/*` |
+| API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | Registered for later data-plane migration. |
+
+The Operator credential is configured at
+`Authentication:Operator:Credential`. API Client credentials cannot satisfy
+the Operator policy. Existing MVP data-plane routes remain unprotected and use
+legacy ownership until their migration tickets are implemented.
+
+## `POST /management/api-clients`
+
+Creates an enabled API Client and its initial API Key atomically. Requires the
+`Operator` policy.
+
+Request:
+
+```json
+{"name":"Shipping Service"}
+```
+
+Success response:
+
+- Status: `201 Created`
+- Location: `/management/api-clients/{api_client_id}`
+
+```json
+{
+  "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "name": "Shipping Service",
+  "api_key": "nrk_<lookup_id>_<secret>",
+  "created_at": "2026-07-17T12:00:00Z"
+}
+```
+
+`api_key` is returned only by this creation operation. NotifyRail persists its
+lookup identifier, SHA-256 verification value, and display-safe prefix, not the
+plaintext credential.
+
+| Status | Condition |
+| --- | --- |
+| `400 Bad Request` | `name` is blank. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+
+## `POST /management/api-clients/{api_client_id}/disable`
+
+Disables an API Client and records `disabled_at`. Repeating the operation is
+idempotent. Requires the `Operator` policy.
+
+| Status | Condition |
+| --- | --- |
+| `204 No Content` | The API Client exists and is disabled. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+| `404 Not Found` | The API Client does not exist. |
 
 ## `GET /healthz`
 
@@ -90,8 +150,9 @@ partial set of deliveries must not be persisted.
 
 ### Idempotency
 
-`idempotency_key` is globally unique because the MVP has no client or tenant
-identity.
+The current unauthenticated MVP endpoint assigns Messages to the legacy API
+Client. Its `idempotency_key` behavior therefore remains effectively global
+until a later ticket applies the authenticated API Client identity.
 
 - Repeating the same normalized request with the same key returns
   `202 Accepted` and the original receipt; it creates no new rows.
@@ -99,8 +160,9 @@ identity.
 - Reusing the key with different message content, options, or recipients
   returns `409 Conflict`.
 
-If client identity is introduced later, both the database uniqueness constraint
-and this contract must change together before idempotency becomes client-scoped.
+The database constraint is already scoped to `(api_client_id, idempotency_key)`;
+authenticated cross-client reuse becomes observable when the data-plane route
+is migrated.
 
 ### Error Responses
 

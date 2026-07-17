@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NotifyRail.Api.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(NotifyRailDbContext))]
-    partial class NotifyRailDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260717115036_ExpandApiClientFoundation")]
+    partial class ExpandApiClientFoundation
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -297,10 +300,6 @@ namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
                         .HasColumnName("id")
                         .HasDefaultValueSql("gen_random_uuid()");
 
-                    b.Property<Guid>("ApiClientId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("api_client_id");
-
                     b.Property<string>("Body")
                         .IsRequired()
                         .HasColumnType("text")
@@ -352,9 +351,9 @@ namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ApiClientId", "IdempotencyKey")
+                    b.HasIndex("IdempotencyKey")
                         .IsUnique()
-                        .HasDatabaseName("messages_api_client_id_idempotency_key_key");
+                        .HasDatabaseName("messages_idempotency_key_key");
 
                     b.ToTable("messages", null, t =>
                         {
@@ -472,15 +471,6 @@ namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
                         .HasConstraintName("delivery_attempts_delivery_id_fkey");
 
                     b.Navigation("Delivery");
-                });
-
-            modelBuilder.Entity("NotifyRail.Api.Features.Messages.Persistence.Message", b =>
-                {
-                    b.HasOne("NotifyRail.Api.Features.ApiClients.Persistence.ApiClient", null)
-                        .WithMany()
-                        .HasForeignKey("ApiClientId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("NotifyRail.Api.Features.Otp.Persistence.OtpChallenge", b =>
