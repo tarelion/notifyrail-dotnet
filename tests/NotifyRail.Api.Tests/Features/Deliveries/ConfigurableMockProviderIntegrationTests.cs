@@ -21,7 +21,6 @@ public sealed class ConfigurableMockProviderIntegrationTests
         WebApplicationFactory<Program> factory)
     {
         _factory = factory
-            .WithoutHostedServices()
             .WithMessageApiAuthentication()
             .WithWebHostBuilder(builder =>
             {
@@ -37,7 +36,8 @@ public sealed class ConfigurableMockProviderIntegrationTests
                         ["MockProvider:Rules:1:Outcomes:0"] = "permanent_failure",
                     });
                 });
-            });
+            })
+            .WithoutHostedServices();
     }
 
     public async ValueTask DisposeAsync()

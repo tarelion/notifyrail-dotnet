@@ -24,9 +24,9 @@ public sealed class CreateMessageEndpointIntegrationTests
     public CreateMessageEndpointIntegrationTests(WebApplicationFactory<Program> factory)
     {
         _factory = factory
-            .WithoutHostedServices()
             .WithWebHostBuilder(builder =>
-                builder.UseSetting("Authentication:Operator:Credential", OperatorCredential));
+                builder.UseSetting("Authentication:Operator:Credential", OperatorCredential))
+            .WithoutHostedServices();
     }
 
     public void Dispose()

@@ -19,8 +19,8 @@ public sealed class GetMessageReportEndpointIntegrationTests
         WebApplicationFactory<Program> factory)
     {
         _factory = factory
-            .WithoutHostedServices()
-            .WithMessageApiAuthentication();
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
     }
 
     public void Dispose()

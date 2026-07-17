@@ -17,8 +17,8 @@ public sealed class DeliveryQueueIntegrationTests
     public DeliveryQueueIntegrationTests(WebApplicationFactory<Program> factory)
     {
         _factory = factory
-            .WithoutHostedServices()
-            .WithMessageApiAuthentication();
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
     }
 
     public void Dispose()
