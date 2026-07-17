@@ -16,7 +16,52 @@ public sealed class SendOtpEndpointIntegrationTests
 
     public SendOtpEndpointIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
+    }
+
+    [Fact]
+    public async Task SendOtp_RequiresApiClientAuthentication()
+    {
+        await ResetDatabaseAsync();
+
+        using var client = _factory.CreateClient();
+        using var response = await client.PostAsJsonAsync(
+            "/otp/send",
+            new
+            {
+                recipient = "+905551111111",
+                idempotency_key = $"otp-auth-{Guid.NewGuid()}",
+            });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SendOtp_AssignsChallengeMessageToAuthenticatedApiClient()
+    {
+        await ResetDatabaseAsync();
+
+        using var ownerClient = await _factory.CreateAuthenticatedMessageClientAsync("OTP Owner");
+        using var otherClient = await _factory.CreateAuthenticatedMessageClientAsync("Other OTP Client");
+        using var response = await ownerClient.PostAsJsonAsync(
+            "/otp/send",
+            new
+            {
+                recipient = "+905551111111",
+                idempotency_key = $"otp-owner-{Guid.NewGuid()}",
+            });
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+        var messageId = body.RootElement.GetProperty("message_id").GetGuid();
+
+        using var ownedMessage = await ownerClient.GetAsync($"/messages/{messageId}");
+        using var hiddenMessage = await otherClient.GetAsync($"/messages/{messageId}");
+
+        Assert.Equal(HttpStatusCode.OK, ownedMessage.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, hiddenMessage.StatusCode);
     }
 
     public void Dispose()
@@ -29,7 +74,7 @@ public sealed class SendOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("OTP Send");
         using var response = await client.PostAsJsonAsync(
             "/otp/send",
             new
@@ -74,7 +119,7 @@ public sealed class SendOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("OTP Replay");
         var idempotencyKey = $"otp-replay-{Guid.NewGuid()}";
         var request = new
         {
@@ -99,11 +144,37 @@ public sealed class SendOtpEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task SendOtp_AllowsDifferentApiClientsToReuseIdempotencyKey()
+    {
+        await ResetDatabaseAsync();
+
+        using var firstClient = await _factory.CreateAuthenticatedMessageClientAsync("First OTP Client");
+        using var secondClient = await _factory.CreateAuthenticatedMessageClientAsync("Second OTP Client");
+        var request = new
+        {
+            recipient = "+905551111111",
+            idempotency_key = $"shared-otp-key-{Guid.NewGuid()}",
+        };
+
+        using var firstResponse = await firstClient.PostAsJsonAsync("/otp/send", request);
+        using var secondResponse = await secondClient.PostAsJsonAsync("/otp/send", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, secondResponse.StatusCode);
+
+        using var firstBody = JsonDocument.Parse(await firstResponse.Content.ReadAsStreamAsync());
+        using var secondBody = JsonDocument.Parse(await secondResponse.Content.ReadAsStreamAsync());
+        Assert.NotEqual(
+            firstBody.RootElement.GetProperty("otp_id").GetGuid(),
+            secondBody.RootElement.GetProperty("otp_id").GetGuid());
+    }
+
+    [Fact]
     public async Task SendOtp_PersistsOnlyHashedCode()
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("OTP Hashing");
         using var response = await client.PostAsJsonAsync(
             "/otp/send",
             new
@@ -139,7 +210,7 @@ public sealed class SendOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Concurrent OTP");
         var request = new
         {
             recipient = "+905551111111",
@@ -173,7 +244,7 @@ public sealed class SendOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("OTP Conflict");
         var idempotencyKey = $"otp-conflict-{Guid.NewGuid()}";
         using var first = await client.PostAsJsonAsync(
             "/otp/send",

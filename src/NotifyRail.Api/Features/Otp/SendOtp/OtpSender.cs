@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
-using NotifyRail.Api.Features.ApiClients.Persistence;
 using NotifyRail.Api.Features.Deliveries.Persistence;
 using NotifyRail.Api.Features.Messages.Persistence;
 using NotifyRail.Api.Features.Otp.Persistence;
@@ -20,6 +19,7 @@ public sealed class OtpSender(
         "messages_api_client_id_idempotency_key_key";
 
     public async Task<SendOtpOutcome> SendAsync(
+        Guid apiClientId,
         string recipient,
         string idempotencyKey,
         CancellationToken cancellationToken)
@@ -30,7 +30,7 @@ public sealed class OtpSender(
         var debugCode = otpCode.Derive(challengeId);
 
         var message = Message.Create(
-            apiClientId: ApiClient.LegacyId,
+            apiClientId,
             type: "otp",
             channel: "sms",
             senderTitle: options.Value.SenderTitle,
@@ -68,6 +68,7 @@ public sealed class OtpSender(
             dbContext.ChangeTracker.Clear();
 
             return await ReplayExistingAsync(
+                apiClientId,
                 recipient,
                 idempotencyKey,
                 cancellationToken);
@@ -81,13 +82,14 @@ public sealed class OtpSender(
     }
 
     private async Task<SendOtpOutcome> ReplayExistingAsync(
+        Guid apiClientId,
         string recipient,
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
         var existing = await dbContext.OtpChallenges
             .AsNoTracking()
-            .Where(challenge => challenge.Message.ApiClientId == ApiClient.LegacyId
+            .Where(challenge => challenge.Message.ApiClientId == apiClientId
                 && challenge.Message.IdempotencyKey == idempotencyKey)
             .Select(challenge => new
             {

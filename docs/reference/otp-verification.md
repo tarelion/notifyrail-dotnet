@@ -35,10 +35,13 @@ non-development environments must supply their own.
 - one recipient Delivery whose `expires_at` matches the challenge TTL
 - one OTP Challenge linked to the Message
 
-The endpoint uses the global Message idempotency key. A replay with the same
-normalized recipient returns the original `otp_id`, `message_id`, `expires_at`,
-and `debug_code`. Reuse with another recipient returns an idempotency conflict.
-The PostgreSQL Message uniqueness constraint arbitrates concurrent sends.
+The endpoint requires API Client authentication. The Message belongs to that
+API Client, and the linked OTP Challenge inherits the same ownership. A replay
+under the same client-scoped Message idempotency key and normalized recipient
+returns the original `otp_id`, `message_id`, `expires_at`, and `debug_code`.
+Reuse with another recipient under the same API Client returns an idempotency
+conflict; another API Client may reuse the key independently. The PostgreSQL
+Message uniqueness constraint arbitrates concurrent sends.
 
 The persisted Message body is `Your verification code is ready.` and never
 contains the OTP Code.
@@ -56,13 +59,16 @@ the simulation-only `debug_code` response described by
 
 ## Verification Contract
 
-`POST /otp/verify` locks the challenge row with PostgreSQL `FOR UPDATE` before
-checking or changing it. Concurrent verification requests are serialized, so
-only one correct request can set `verified_at`.
+`POST /otp/verify` requires API Client authentication and locks an owned
+challenge row with PostgreSQL `FOR UPDATE` before checking or changing it.
+Unknown and cross-client challenge identifiers both return not found. A
+cross-client request does not consume an attempt or reveal challenge state.
+Concurrent verification requests from the owner are serialized, so only one
+correct request can set `verified_at`.
 
 Checks are applied in this order:
 
-1. Reject an unknown challenge.
+1. Reject an unknown or non-owned challenge.
 2. Reject an already verified challenge.
 3. Reject a challenge at or after `expires_at`.
 4. Reject a challenge that exhausted `max_attempts`.

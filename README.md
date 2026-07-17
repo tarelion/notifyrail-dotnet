@@ -169,6 +169,7 @@ Create a mock OTP challenge:
 
 ```sh
 curl --request POST http://localhost:5012/otp/send \
+  --header 'Authorization: ApiKey <api_key>' \
   --header 'Content-Type: application/json' \
   --data '{
     "recipient": "+905551111111",
@@ -180,6 +181,7 @@ Use the returned `otp_id` and `debug_code` once:
 
 ```sh
 curl --request POST http://localhost:5012/otp/verify \
+  --header 'Authorization: ApiKey <api_key>' \
   --header 'Content-Type: application/json' \
   --data '{
     "otp_id": "<otp_id>",
@@ -189,6 +191,7 @@ curl --request POST http://localhost:5012/otp/verify \
 
 Repeating verification returns `409 Conflict`. `debug_code` exists only because
 the MVP does not send real SMS messages; PostgreSQL stores only the code hash.
+Both OTP operations require the API Key belonging to the challenge owner.
 
 ## Tests
 
