@@ -39,6 +39,8 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `DeliveryWorker:PollInterval` | configuration / `DeliveryWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
 | `DeliveryQueue:BaseRetryDelay` | configuration / `DeliveryQueueOptions.BaseRetryDelay` | `1m` | Positive base retry delay. Attempt `N` waits `N * BaseRetryDelay`. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
+| `MockProviderCallback:Secret` | configuration / `MockProviderCallbackOptions.Secret` | none | Required provider-specific HMAC secret for authenticating mock Provider Callbacks. It is separate from API Keys, Operator Credentials, and Webhook Secrets. |
+| `MockProviderCallback:SignatureTolerance` | configuration / `MockProviderCallbackOptions.SignatureTolerance` | `00:05:00` | Maximum accepted clock difference in either direction for mock Provider Callback signatures. |
 | `Otp:Secret` | configuration / `OtpOptions.Secret` | none | Required secret for mock OTP derivation and hashing. |
 | `Otp:SenderTitle` | configuration / `OtpOptions.SenderTitle` | `NotifyRail` | Non-blank OTP sender title. |
 | `Otp:Ttl` | configuration / `OtpOptions.Ttl` | `5m` | Positive OTP Challenge and Delivery lifetime. |
@@ -158,8 +160,14 @@ IDs.
 
 ## Mock Provider Callback Processing
 
-`POST /provider-callbacks/mock` passes a normalized provider message ID and
-terminal status to `MockProviderCallbackHandler`.
+`POST /provider-callbacks/mock` first passes the timestamp header, signature
+header, and exact request body to the provider callback verifier boundary. The
+mock implementation validates a versioned HMAC-SHA256 signature with the
+separate `MockProviderCallback:Secret` and rejects timestamps outside
+`MockProviderCallback:SignatureTolerance`. Only an authenticated body is parsed
+and passed as a normalized provider message ID and terminal status to
+`MockProviderCallbackHandler`. A future provider adapter can replace the
+verifier without changing Delivery transition behavior.
 
 The handler performs a conditional PostgreSQL update:
 

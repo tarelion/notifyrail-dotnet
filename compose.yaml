@@ -20,6 +20,7 @@ services:
     command: ["--migrate"]
     environment:
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail
+      MockProviderCallback__Secret: ${NOTIFYRAIL_MOCK_PROVIDER_CALLBACK_SECRET:-notifyrail-local-compose-callback-secret-change-me}
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,6 +38,7 @@ services:
       Logging__LogLevel__Microsoft.EntityFrameworkCore: Warning
       Otp__Secret: ${NOTIFYRAIL_OTP_SECRET:-notifyrail-local-compose-secret-change-me}
       Authentication__Operator__Credential: ${NOTIFYRAIL_OPERATOR_CREDENTIAL:-}
+      MockProviderCallback__Secret: ${NOTIFYRAIL_MOCK_PROVIDER_CALLBACK_SECRET:-notifyrail-local-compose-callback-secret-change-me}
     ports:
       - "127.0.0.1:5012:8080"
     depends_on:
@@ -76,6 +78,7 @@ services:
       target: test
     environment:
       ConnectionStrings__Postgres: Host=test-postgres;Port=5432;Database=notifyrail_tests;Username=notifyrail;Password=notifyrail
+      MockProviderCallback__Secret: notifyrail-test-provider-callback-secret
     depends_on:
       test-postgres:
         condition: service_healthy
