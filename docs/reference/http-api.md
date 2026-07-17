@@ -34,18 +34,19 @@ NotifyRail registers separate replaceable authentication schemes and policies:
 | Identity | Authorization header | Policy | Current routes |
 | --- | --- | --- | --- |
 | Operator | `Authorization: Operator <credential>` | `Operator` | `/management/*` |
-| API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | `GET /api-client`, `POST /messages`, and all `GET /messages/{message_id}/*` routes. |
+| API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | `GET /api-client`, all Message routes, `POST /otp/send`, and `POST /otp/verify`. |
 
 The Operator credential is configured at
 `Authentication:Operator:Credential` and must be non-blank at application
 startup. API Client credentials cannot satisfy the Operator policy. OTP routes
-continue to use legacy ownership until their migration ticket is implemented.
+assign and authorize ownership through the authenticated API Client. Health
+routes remain public, and Provider Callback authentication remains
+provider-specific.
 
 ## `GET /api-client`
 
-Returns the API Client represented by the supplied API Key. This is the first
-public API Client-policy route and provides an HTTP boundary for validating a
-credential during rotation before Message and OTP routes are migrated.
+Returns the API Client represented by the supplied API Key and provides an HTTP
+boundary for validating a credential during rotation.
 
 Success response:
 
@@ -468,14 +469,15 @@ the requested UUID, including when another API Client owns it:
 ## `POST /otp/send`
 
 Creates one OTP Challenge, one `otp` Message, and one recipient Delivery in a
-single transaction.
+single transaction. The Message belongs to the authenticated API Client, and
+the linked OTP Challenge inherits that ownership.
 
 ### Request Body
 
 | Field | JSON type | Required | Contract |
 | --- | --- | --- | --- |
 | `recipient` | string | yes | Trimmed non-blank SMS recipient. |
-| `idempotency_key` | string | yes | Trimmed globally unique Message idempotency key. |
+| `idempotency_key` | string | yes | Trimmed Message idempotency key, unique within the authenticated API Client. |
 
 ```json
 {
@@ -502,19 +504,22 @@ stored in PostgreSQL or in the Message body.
 
 Repeating the same normalized request with the same idempotency key returns the
 original response, including the same `debug_code`. Reusing the key with a
-different recipient returns `409 Conflict`.
+different recipient under the same API Client returns `409 Conflict`. Different
+API Clients may reuse the same key independently.
 
 ### Error Responses
 
 | Status | Body | Condition |
 | --- | --- | --- |
+| `401 Unauthorized` | empty | The API Key is missing or invalid. |
 | `400 Bad Request` | `{"error":"recipient is required"}` | Recipient is null, empty, or whitespace. |
 | `400 Bad Request` | `{"error":"idempotency_key is required"}` | Idempotency key is null, empty, or whitespace. |
 | `409 Conflict` | `{"error":"idempotency key is already used with different content"}` | Key belongs to another normalized request. |
 
 ## `POST /otp/verify`
 
-Verifies one active OTP Challenge using its six-digit code.
+Verifies one active OTP Challenge owned by the authenticated API Client using
+its six-digit code.
 
 ### Request Body
 
@@ -543,10 +548,11 @@ Verifies one active OTP Challenge using its six-digit code.
 
 | Status | Body | Condition |
 | --- | --- | --- |
+| `401 Unauthorized` | empty | The API Key is missing or invalid. |
 | `400 Bad Request` | `{"error":"otp_id is required"}` | OTP ID is absent or empty. |
 | `400 Bad Request` | `{"error":"code must contain exactly 6 digits"}` | Code shape is invalid. |
 | `400 Bad Request` | `{"error":"invalid OTP code","attempts_remaining":4}` | Code is incorrect and attempts remain. |
-| `404 Not Found` | `{"error":"OTP challenge not found"}` | OTP ID is unknown. |
+| `404 Not Found` | `{"error":"OTP challenge not found"}` | OTP ID is unknown or belongs to another API Client. |
 | `409 Conflict` | `{"error":"OTP challenge is already verified"}` | Challenge was already used successfully. |
 | `410 Gone` | `{"error":"OTP challenge has expired"}` | Current time is at or after expiry. |
 | `429 Too Many Requests` | `{"error":"OTP attempt limit exceeded","attempts_remaining":0}` | Incorrect-attempt limit is reached. |

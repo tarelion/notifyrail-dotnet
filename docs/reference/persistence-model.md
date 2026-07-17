@@ -24,7 +24,7 @@ agent-readable contract.
 - Each delivery attempt references one delivery through
   `delivery_attempts.delivery_id`.
 - Each OTP challenge references one Message through
-  `otp_challenges.message_id`.
+  `otp_challenges.message_id` and inherits that Message's API Client ownership.
 - All foreign keys use `NO ACTION` deletion behavior; deleting a parent does
   not cascade to its children.
 
@@ -178,8 +178,8 @@ Cross-table OTP invariants:
 
 - Generic Message creation inserts one Message and all of its Deliveries in one
   transaction and assigns the authenticated API Client as owner.
-- OTP writes continue to use the legacy API Client until the OTP API is
-  migrated.
+- OTP send assigns the authenticated API Client to its Message; OTP verification
+  scopes challenge lookup through that Message owner.
 - A Message cannot contain duplicate normalized recipients because
   `(message_id, recipient)` is unique.
 - Provider-result recording inserts an Attempt and updates its Delivery in one
