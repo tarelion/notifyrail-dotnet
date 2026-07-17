@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NotifyRail.Api.Features.Deliveries.Persistence;
+using NotifyRail.Api.Features.ApiClients.Persistence;
 using NotifyRail.Api.Features.Messages.Persistence;
 using NotifyRail.Api.Infrastructure.Persistence;
 
@@ -8,7 +9,8 @@ namespace NotifyRail.Api.Features.Messages.CreateMessage;
 
 public sealed class MessageIntake
 {
-    private const string IdempotencyKeyUniqueConstraint = "messages_idempotency_key_key";
+    private const string IdempotencyKeyUniqueConstraint =
+        "messages_api_client_id_idempotency_key_key";
 
     private readonly NotifyRailDbContext _dbContext;
 
@@ -27,6 +29,7 @@ public sealed class MessageIntake
             : TruncateToMicrosecond(command.ScheduledAt.Value);
 
         var message = Message.Create(
+            ApiClient.LegacyId,
             command.Type,
             command.Channel,
             command.SenderTitle,
@@ -85,7 +88,10 @@ public sealed class MessageIntake
         var existingMessage = await _dbContext.Messages
             .AsNoTracking()
             .SingleOrDefaultAsync(
-                message => message.IdempotencyKey == command.IdempotencyKey,
+                // Existing data-plane behavior remains scoped to the legacy
+                // API Client until authentication is applied by a later slice.
+                message => message.ApiClientId == ApiClient.LegacyId
+                    && message.IdempotencyKey == command.IdempotencyKey,
                 cancellationToken);
 
         if (existingMessage is null)

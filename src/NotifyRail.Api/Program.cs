@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.EntityFrameworkCore;
+using NotifyRail.Api.Authentication;
+using NotifyRail.Api.Features.ApiClients.CreateApiClient;
+using NotifyRail.Api.Features.ApiClients.DisableApiClient;
 using NotifyRail.Api.Features.Deliveries.ProviderCallbacks.Mock;
 using NotifyRail.Api.Features.Deliveries.Providers;
 using NotifyRail.Api.Features.Deliveries.Queue;
@@ -17,6 +20,7 @@ using NotifyRail.Api.Infrastructure.Persistence;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddNotifyRailHealth(builder.Configuration);
+builder.Services.AddNotifyRailAuthentication();
 
 var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres");
 if (!string.IsNullOrWhiteSpace(postgresConnectionString))
@@ -44,6 +48,8 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
             "Otp:MaxAttempts must be greater than zero.")
         .ValidateOnStart();
     builder.Services.AddSingleton(TimeProvider.System);
+    builder.Services.AddScoped<ApiClientCreator>();
+    builder.Services.AddScoped<ApiClientDisabler>();
     builder.Services.AddSingleton<IProviderSender, MockProvider>();
     builder.Services.AddScoped<DeliveryQueue>();
     builder.Services.AddScoped<DeliveryWorker>();
@@ -68,7 +74,12 @@ if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
     return;
 }
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapHealthEndpoints();
+app.MapCreateApiClientEndpoint();
+app.MapDisableApiClientEndpoint();
 app.MapCreateMessageEndpoint();
 app.MapGetMessageEndpoint();
 app.MapGetMessageDeliveriesEndpoint();

@@ -3,19 +3,22 @@
 ## Purpose
 
 This page defines the PostgreSQL schema currently mapped by EF Core for
-messages, deliveries, delivery attempts, and OTP challenges. Migrations remain
+API Clients, API Keys, messages, deliveries, delivery attempts, and OTP
+challenges. Migrations remain
 the executable schema history; this page is the canonical human- and
 agent-readable contract.
 
 ## Scope
 
 - DbContext: `src/NotifyRail.Api/Infrastructure/Persistence/NotifyRailDbContext.cs`
-- Entity mappings: `MessageConfiguration`, `DeliveryConfiguration`,
+- Entity mappings: `ApiClientConfiguration`, `ApiKeyConfiguration`,
+  `MessageConfiguration`, `DeliveryConfiguration`,
   `DeliveryAttemptConfiguration`, and `OtpChallengeConfiguration`
 - Migrations: `src/NotifyRail.Api/Infrastructure/Persistence/Migrations`
 
 ## Relationships
 
+- One API Client has zero or more API Keys and Messages.
 - One message has one delivery per normalized recipient.
 - Each delivery references one message through `deliveries.message_id`.
 - Each delivery attempt references one delivery through
@@ -25,16 +28,55 @@ agent-readable contract.
 - All foreign keys use `NO ACTION` deletion behavior; deleting a parent does
   not cascade to its children.
 
+## `api_clients`
+
+| Column | PostgreSQL type | Required | Contract |
+| --- | --- | --- | --- |
+| `id` | `uuid` | yes | Primary key; defaults to `gen_random_uuid()`. |
+| `name` | `text` | yes | Display name; must not be blank after trimming. |
+| `is_enabled` | `boolean` | yes | Whether credentials may authenticate; defaults to `true`. |
+| `created_at` | `timestamp with time zone` | yes | Creation instant. |
+| `updated_at` | `timestamp with time zone` | yes | Latest state-change instant. |
+| `disabled_at` | `timestamp with time zone` | no | Required exactly when `is_enabled` is `false`. |
+
+The fixed API Client ID `00000000-0000-0000-0000-000000000001` identifies
+the legacy owner used while data-plane endpoints are migrated. The ownership
+migration creates it and does not create an API Key for it.
+
+## `api_keys`
+
+| Column | PostgreSQL type | Required | Contract |
+| --- | --- | --- | --- |
+| `id` | `uuid` | yes | Primary key; defaults to `gen_random_uuid()`. |
+| `api_client_id` | `uuid` | yes | References `api_clients(id)`. |
+| `lookup_id` | `text` | yes | Unique, non-secret identifier embedded in the credential. |
+| `verification_hash` | `bytea` | yes | 32-byte SHA-256 verification value; never plaintext. |
+| `display_prefix` | `text` | yes | Non-secret prefix safe for operator display. |
+| `created_at` | `timestamp with time zone` | yes | Credential creation instant. |
+| `last_used_at` | `timestamp with time zone` | no | Most recent authenticated use when tracked. |
+| `expires_at` | `timestamp with time zone` | no | Optional expiry instant. |
+| `revoked_at` | `timestamp with time zone` | no | Irreversible revocation instant. |
+
+Full API Keys have the recognizable `nrk_<lookup_id>_<secret>` form. Only the
+creation response exposes the full value; no plaintext column exists.
+
+Indexes and uniqueness:
+
+- Primary key on `id`.
+- Unique constraint `api_keys_lookup_id_key` on `lookup_id`.
+- Index on `api_client_id` for credential lookup by owner.
+
 ## `messages`
 
 | Column | PostgreSQL type | Required | Contract |
 | --- | --- | --- | --- |
 | `id` | `uuid` | yes | Primary key; defaults to `gen_random_uuid()`. |
+| `api_client_id` | `uuid` | yes | References the owning `api_clients(id)`. |
 | `type` | `text` | yes | One of `otp`, `transactional`, or `campaign`. |
 | `channel` | `text` | yes | Must be `sms`. |
 | `sender_title` | `text` | yes | Must not be blank after trimming. |
 | `body` | `text` | yes | Must not be blank after trimming. |
-| `idempotency_key` | `text` | yes | Must not be blank after trimming; globally unique for the MVP. |
+| `idempotency_key` | `text` | yes | Must not be blank after trimming; unique within one API Client. |
 | `report_label` | `text` | no | Client-provided reporting label. |
 | `encoding` | `text` | no | When present, one of `latin`, `turkish`, or `unicode`. |
 | `scheduled_at` | `timestamp with time zone` | no | UTC-normalized earliest instant at which queued deliveries may be claimed. |
@@ -44,7 +86,8 @@ agent-readable contract.
 Indexes and uniqueness:
 
 - Primary key on `id`.
-- Unique constraint `messages_idempotency_key_key` on `idempotency_key`.
+- Unique constraint `messages_api_client_id_idempotency_key_key` on
+  `(api_client_id, idempotency_key)`.
 
 ## `deliveries`
 
@@ -133,6 +176,7 @@ Cross-table OTP invariants:
 
 - Generic Message creation inserts one Message and all of its Deliveries in one
   transaction.
+- Existing and not-yet-migrated data-plane writes use the legacy API Client.
 - A Message cannot contain duplicate normalized recipients because
   `(message_id, recipient)` is unique.
 - Provider-result recording inserts an Attempt and updates its Delivery in one

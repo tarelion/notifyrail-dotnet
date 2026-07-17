@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NotifyRail.Api.Features.Messages.CreateMessage;
+using NotifyRail.Api.Features.ApiClients.Persistence;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Tests;
@@ -25,6 +26,31 @@ public sealed class CreateMessageEndpointIntegrationTests
     public void Dispose()
     {
         _factory.Dispose();
+    }
+
+    [Fact]
+    public async Task CreateMessage_AssignsMessageToLegacyApiClient()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = _factory.CreateClient();
+        using var response = await client.PostAsJsonAsync(
+            "/messages",
+            ValidRequest($"legacy-owner-{Guid.NewGuid()}"));
+        var receipt = await response.Content.ReadFromJsonAsync<CreateMessageResponse>();
+
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.NotNull(receipt);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        var apiClientId = await dbContext.Messages
+            .AsNoTracking()
+            .Where(message => message.Id == receipt.MessageId)
+            .Select(message => message.ApiClientId)
+            .SingleAsync();
+
+        Assert.Equal(ApiClient.LegacyId, apiClientId);
     }
 
     [Fact]

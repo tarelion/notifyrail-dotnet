@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using NotifyRail.Api.Features.ApiClients.Persistence;
 using NotifyRail.Api.Features.Deliveries.Persistence;
 using NotifyRail.Api.Features.Messages.Persistence;
 using NotifyRail.Api.Features.Otp.Persistence;
@@ -15,7 +16,8 @@ public sealed class OtpSender(
     TimeProvider timeProvider)
 {
     private const string MessageBody = "Your verification code is ready.";
-    private const string IdempotencyKeyUniqueConstraint = "messages_idempotency_key_key";
+    private const string IdempotencyKeyUniqueConstraint =
+        "messages_api_client_id_idempotency_key_key";
 
     public async Task<SendOtpOutcome> SendAsync(
         string recipient,
@@ -28,6 +30,7 @@ public sealed class OtpSender(
         var debugCode = otpCode.Derive(challengeId);
 
         var message = Message.Create(
+            apiClientId: ApiClient.LegacyId,
             type: "otp",
             channel: "sms",
             senderTitle: options.Value.SenderTitle,
@@ -84,7 +87,8 @@ public sealed class OtpSender(
     {
         var existing = await dbContext.OtpChallenges
             .AsNoTracking()
-            .Where(challenge => challenge.Message.IdempotencyKey == idempotencyKey)
+            .Where(challenge => challenge.Message.ApiClientId == ApiClient.LegacyId
+                && challenge.Message.IdempotencyKey == idempotencyKey)
             .Select(challenge => new
             {
                 Challenge = challenge,

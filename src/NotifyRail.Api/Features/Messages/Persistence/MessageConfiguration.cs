@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using NotifyRail.Api.Features.ApiClients.Persistence;
 
 namespace NotifyRail.Api.Features.Messages.Persistence;
 
@@ -35,6 +36,15 @@ public sealed class MessageConfiguration : IEntityTypeConfiguration<Message>
             .HasColumnName("id")
             .HasDefaultValueSql("gen_random_uuid()");
 
+        builder.Property(message => message.ApiClientId)
+            .HasColumnName("api_client_id")
+            .IsRequired();
+
+        builder.HasOne<ApiClient>()
+            .WithMany()
+            .HasForeignKey(message => message.ApiClientId)
+            .OnDelete(DeleteBehavior.NoAction);
+
         builder.Property(message => message.Type)
             .HasColumnName("type")
             .HasColumnType("text")
@@ -60,12 +70,9 @@ public sealed class MessageConfiguration : IEntityTypeConfiguration<Message>
             .HasColumnType("text")
             .IsRequired();
 
-        // MVP scope: idempotency keys are globally unique because client identity
-        // does not exist yet. Replace this with a client-scoped unique index when
-        // clients/API keys are introduced.
-        builder.HasIndex(message => message.IdempotencyKey)
+        builder.HasIndex(message => new { message.ApiClientId, message.IdempotencyKey })
             .IsUnique()
-            .HasDatabaseName("messages_idempotency_key_key");
+            .HasDatabaseName("messages_api_client_id_idempotency_key_key");
 
         builder.Property(message => message.ReportLabel)
             .HasColumnName("report_label")
