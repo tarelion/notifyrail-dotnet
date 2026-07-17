@@ -33,6 +33,7 @@ public sealed class DeliveryWorkerIntegrationTests
     public void Dispose()
     {
         _manualFactory.Dispose();
+        _hostedFactory.Dispose();
     }
 
     [Fact]
