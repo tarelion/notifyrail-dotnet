@@ -34,13 +34,35 @@ NotifyRail registers separate replaceable authentication schemes and policies:
 | Identity | Authorization header | Policy | Current routes |
 | --- | --- | --- | --- |
 | Operator | `Authorization: Operator <credential>` | `Operator` | `/management/*` |
-| API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | Registered for later data-plane migration. |
+| API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | `GET /api-client`; registered for later Message and OTP migration. |
 
 The Operator credential is configured at
 `Authentication:Operator:Credential` and must be non-blank at application
 startup. API Client credentials cannot satisfy the Operator policy. Existing
 MVP data-plane routes remain unprotected and use legacy ownership until their
 migration tickets are implemented.
+
+## `GET /api-client`
+
+Returns the API Client represented by the supplied API Key. This is the first
+public API Client-policy route and provides an HTTP boundary for validating a
+credential during rotation before Message and OTP routes are migrated.
+
+Success response:
+
+- Status: `200 OK`
+
+```json
+{
+  "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "name": "Shipping Service"
+}
+```
+
+Successful authentication updates the credential's `last_used_at`. Missing,
+malformed, unknown, expired, revoked, or disabled-client credentials return
+`401 Unauthorized` and do not update it. An Operator credential cannot satisfy
+the `ApiClient` policy.
 
 ## `POST /management/api-clients`
 

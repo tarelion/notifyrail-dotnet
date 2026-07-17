@@ -3,14 +3,10 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using NotifyRail.Api.Authentication;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Tests;
@@ -33,7 +29,6 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
                 {
                     services.RemoveAll<TimeProvider>();
                     services.AddSingleton<TimeProvider>(_timeProvider);
-                    services.AddSingleton<IStartupFilter, ApiClientTestEndpointStartupFilter>();
                 });
             });
     }
@@ -117,9 +112,13 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
         using var apiKeyClient = _factory.CreateClient();
         apiKeyClient.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("ApiKey", apiClient.ApiKey);
-        using var authenticationResponse = await apiKeyClient.GetAsync("/__tests/api-client");
+        using var authenticationResponse = await apiKeyClient.GetAsync("/api-client");
+        var current = await authenticationResponse.Content
+            .ReadFromJsonAsync<GetCurrentApiClientResponse>();
 
-        Assert.Equal(HttpStatusCode.NoContent, authenticationResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, authenticationResponse.StatusCode);
+        Assert.NotNull(current);
+        Assert.Equal(apiClient.ApiClientId, current.ApiClientId);
 
         using var metadataResponse = await operatorClient.GetAsync(
             $"/management/api-clients/{apiClient.ApiClientId}/api-keys");
@@ -127,6 +126,25 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
 
         Assert.NotNull(listed);
         Assert.Equal(_timeProvider.GetUtcNow(), Assert.Single(listed.ApiKeys).LastUsedAt);
+    }
+
+    [Fact]
+    public async Task CreateApiKey_ReturnsUnauthorized_WhenApiKeyIsUsedAsOperatorCredential()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var operatorClient = CreateOperatorClient();
+        var apiClient = await CreateApiClientAsync(operatorClient);
+        using var apiKeyClient = _factory.CreateClient();
+        apiKeyClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("ApiKey", apiClient.ApiKey);
+
+        using var response = await apiKeyClient.PostAsJsonAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/api-keys",
+            new { expires_at = (DateTimeOffset?)null });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Single(await ListApiKeysAsync(operatorClient, apiClient.ApiClientId));
     }
 
     [Fact]
@@ -152,7 +170,7 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
 
         Assert.Equal(HttpStatusCode.NoContent, revokeResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, await AuthenticateAsync(apiClient.ApiKey));
-        Assert.Equal(HttpStatusCode.NoContent, await AuthenticateAsync(secondKey.ApiKey));
+        Assert.Equal(HttpStatusCode.OK, await AuthenticateAsync(secondKey.ApiKey));
 
         var firstRevokedAt = (await ListApiKeysAsync(operatorClient, apiClient.ApiClientId))
             .Single(key => key.ApiKeyId == initialKeyId)
@@ -187,7 +205,7 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
         var expiringKey = await createResponse.Content.ReadFromJsonAsync<CreateApiKeyResponse>();
         Assert.NotNull(expiringKey);
 
-        Assert.Equal(HttpStatusCode.NoContent, await AuthenticateAsync(expiringKey.ApiKey));
+        Assert.Equal(HttpStatusCode.OK, await AuthenticateAsync(expiringKey.ApiKey));
         var lastUsedAt = (await ListApiKeysAsync(operatorClient, apiClient.ApiClientId))
             .Single(key => key.ApiKeyId == expiringKey.ApiKeyId)
             .LastUsedAt;
@@ -226,7 +244,7 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
     {
         using var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("ApiKey", apiKey);
-        using var response = await client.GetAsync("/__tests/api-client");
+        using var response = await client.GetAsync("/api-client");
         return response.StatusCode;
     }
 
@@ -263,6 +281,9 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
         [property: JsonPropertyName("api_key")] string ApiKey,
         [property: JsonPropertyName("display_prefix")] string DisplayPrefix);
 
+    private sealed record GetCurrentApiClientResponse(
+        [property: JsonPropertyName("api_client_id")] Guid ApiClientId);
+
     private sealed record CreateApiKeyResponse(
         [property: JsonPropertyName("api_key_id")] Guid ApiKeyId,
         [property: JsonPropertyName("api_key")] string ApiKey,
@@ -280,30 +301,6 @@ public sealed class ApiKeyLifecycleEndpointIntegrationTests : IDisposable
         [property: JsonPropertyName("last_used_at")] DateTimeOffset? LastUsedAt,
         [property: JsonPropertyName("expires_at")] DateTimeOffset? ExpiresAt,
         [property: JsonPropertyName("revoked_at")] DateTimeOffset? RevokedAt);
-
-    private sealed class ApiClientTestEndpointStartupFilter : IStartupFilter
-    {
-        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next)
-        {
-            return app =>
-            {
-                app.Use(async (context, continuePipeline) =>
-                {
-                    if (context.Request.Path != "/__tests/api-client")
-                    {
-                        await continuePipeline();
-                        return;
-                    }
-
-                    var result = await context.AuthenticateAsync(ApiClientAuthenticationHandler.SchemeName);
-                    context.Response.StatusCode = result.Succeeded
-                        ? StatusCodes.Status204NoContent
-                        : StatusCodes.Status401Unauthorized;
-                });
-                next(app);
-            };
-        }
-    }
 
     private sealed class MutableTimeProvider : TimeProvider
     {

@@ -26,7 +26,7 @@ public sealed class ApiKeyCreator(NotifyRailDbContext dbContext, TimeProvider ti
             credential.VerificationHash,
             credential.DisplayPrefix,
             createdAt,
-            expiresAt is null ? null : NormalizeTimestamp(expiresAt.Value));
+            expiresAt is null ? null : PostgresTimestamp.Normalize(expiresAt.Value));
 
         dbContext.ApiKeys.Add(apiKey);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -39,9 +39,4 @@ public sealed class ApiKeyCreator(NotifyRailDbContext dbContext, TimeProvider ti
             apiKey.ExpiresAt);
     }
 
-    private static DateTimeOffset NormalizeTimestamp(DateTimeOffset value)
-    {
-        var utcValue = value.ToUniversalTime();
-        return utcValue.AddTicks(-(utcValue.Ticks % 10));
-    }
 }

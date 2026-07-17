@@ -27,7 +27,7 @@ public sealed class OtpVerifier(
             return new VerifyOtpOutcome(VerifyOtpOutcomeKind.NotFound, null);
         }
 
-        var now = TruncateToMicrosecond(timeProvider.GetUtcNow());
+        var now = PostgresTimestamp.Normalize(timeProvider.GetUtcNow());
         if (challenge.VerifiedAt is not null)
         {
             await transaction.CommitAsync(cancellationToken);
@@ -70,10 +70,4 @@ public sealed class OtpVerifier(
             new VerifyOtpResponse(challenge.Id, "verified", now));
     }
 
-    private static DateTimeOffset TruncateToMicrosecond(DateTimeOffset value)
-    {
-        var utcValue = value.ToUniversalTime();
-        var ticks = utcValue.Ticks - utcValue.Ticks % 10;
-        return new DateTimeOffset(ticks, TimeSpan.Zero);
-    }
 }
