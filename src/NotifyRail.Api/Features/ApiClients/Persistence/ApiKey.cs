@@ -24,6 +24,11 @@ public sealed class ApiKey
         };
     }
 
+    public void RecordUse(DateTimeOffset usedAt)
+    {
+        LastUsedAt = usedAt;
+    }
+
     public Guid Id { get; private set; }
 
     public Guid ApiClientId { get; private set; }

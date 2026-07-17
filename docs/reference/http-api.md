@@ -37,9 +37,10 @@ NotifyRail registers separate replaceable authentication schemes and policies:
 | API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | Registered for later data-plane migration. |
 
 The Operator credential is configured at
-`Authentication:Operator:Credential`. API Client credentials cannot satisfy
-the Operator policy. Existing MVP data-plane routes remain unprotected and use
-legacy ownership until their migration tickets are implemented.
+`Authentication:Operator:Credential` and must be non-blank at application
+startup. API Client credentials cannot satisfy the Operator policy. Existing
+MVP data-plane routes remain unprotected and use legacy ownership until their
+migration tickets are implemented.
 
 ## `POST /management/api-clients`
 

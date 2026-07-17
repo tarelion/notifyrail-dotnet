@@ -11,7 +11,7 @@ public sealed class OperatorAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder,
-    IConfiguration configuration)
+    IOptionsMonitor<OperatorAuthenticationOptions> operatorOptions)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "Operator";
@@ -31,9 +31,7 @@ public sealed class OperatorAuthenticationHandler(
         }
 
         var suppliedCredential = authorization[prefix.Length..];
-        var configuredCredential = configuration["Authentication:Operator:Credential"];
-        if (string.IsNullOrEmpty(configuredCredential)
-            || !CredentialsMatch(suppliedCredential, configuredCredential))
+        if (!CredentialsMatch(suppliedCredential, operatorOptions.CurrentValue.Credential))
         {
             return Task.FromResult(AuthenticateResult.Fail("Invalid Operator credential."));
         }

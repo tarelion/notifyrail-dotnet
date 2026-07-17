@@ -202,6 +202,16 @@ public sealed class CreateApiClientEndpointIntegrationTests : IDisposable
             created.ApiClientId.ToString(),
             authenticated.Principal?.FindFirst("notifyrail:api_client_id")?.Value);
 
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+            var lastUsedAt = await dbContext.ApiKeys
+                .Where(apiKey => apiKey.ApiClientId == created.ApiClientId)
+                .Select(apiKey => apiKey.LastUsedAt)
+                .SingleAsync();
+            Assert.NotNull(lastUsedAt);
+        }
+
         using var disableResponse = await client.PostAsync(
             $"/management/api-clients/{created.ApiClientId}/disable",
             content: null);

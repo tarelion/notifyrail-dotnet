@@ -1,4 +1,5 @@
 using NotifyRail.Api.Features.ApiClients.Persistence;
+using NotifyRail.Api.Features.ApiClients;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Features.ApiClients.CreateApiClient;

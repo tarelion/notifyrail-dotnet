@@ -106,6 +106,19 @@ public sealed class ApiClientFoundationMigrationTests
                     'NotifyRail', 'Second client message', 'existing-mvp-key',
                     NOW(), NOW())
                 """);
+
+            var duplicateException = await Assert.ThrowsAsync<PostgresException>(() =>
+                dbContext.Database.ExecuteSqlInterpolatedAsync(
+                    $"""
+                    INSERT INTO messages (
+                        id, api_client_id, type, channel, sender_title, body,
+                        idempotency_key, created_at, updated_at)
+                    VALUES (
+                        {Guid.NewGuid()}, {secondClient.Id}, 'transactional', 'sms',
+                        'NotifyRail', 'Duplicate client message', 'existing-mvp-key',
+                        NOW(), NOW())
+                    """));
+            Assert.Equal(PostgresErrorCodes.UniqueViolation, duplicateException.SqlState);
         }
         finally
         {

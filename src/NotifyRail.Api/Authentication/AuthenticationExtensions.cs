@@ -6,6 +6,13 @@ public static class AuthenticationExtensions
 {
     public static IServiceCollection AddNotifyRailAuthentication(this IServiceCollection services)
     {
+        services.AddOptions<OperatorAuthenticationOptions>()
+            .BindConfiguration(OperatorAuthenticationOptions.SectionName)
+            .Validate(
+                options => !string.IsNullOrWhiteSpace(options.Credential),
+                "Authentication:Operator:Credential is required.")
+            .ValidateOnStart();
+
         services.AddAuthentication()
             .AddScheme<AuthenticationSchemeOptions, ApiClientAuthenticationHandler>(
                 ApiClientAuthenticationHandler.SchemeName,

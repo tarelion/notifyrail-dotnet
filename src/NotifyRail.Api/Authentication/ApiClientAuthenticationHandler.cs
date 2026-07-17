@@ -1,10 +1,10 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using NotifyRail.Api.Features.ApiClients;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Authentication;
@@ -22,20 +22,21 @@ public sealed class ApiClientAuthenticationHandler(
 
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        if (!TryReadCredential(out var lookupId, out var secret))
+        if (!TryReadCredential(out var lookupId, out var verificationHash))
         {
             return AuthenticateResult.NoResult();
         }
 
+        var authenticatedAt = timeProvider.GetUtcNow();
+
         var apiKey = await dbContext.ApiKeys
-            .AsNoTracking()
             .SingleOrDefaultAsync(candidate => candidate.LookupId == lookupId, Context.RequestAborted);
         if (apiKey is null
             || apiKey.RevokedAt is not null
-            || apiKey.ExpiresAt <= timeProvider.GetUtcNow()
+            || apiKey.ExpiresAt <= authenticatedAt
             || !CryptographicOperations.FixedTimeEquals(
                 apiKey.VerificationHash,
-                SHA256.HashData(Encoding.UTF8.GetBytes(secret))))
+                verificationHash))
         {
             return AuthenticateResult.Fail("Invalid API Key.");
         }
@@ -50,6 +51,9 @@ public sealed class ApiClientAuthenticationHandler(
             return AuthenticateResult.Fail("Invalid API Key.");
         }
 
+        apiKey.RecordUse(authenticatedAt);
+        await dbContext.SaveChangesAsync(Context.RequestAborted);
+
         var identity = new ClaimsIdentity(
             [
                 new Claim(ClaimTypes.NameIdentifier, apiClient.Id.ToString()),
@@ -61,10 +65,10 @@ public sealed class ApiClientAuthenticationHandler(
         return AuthenticateResult.Success(new AuthenticationTicket(principal, SchemeName));
     }
 
-    private bool TryReadCredential(out string lookupId, out string secret)
+    private bool TryReadCredential(out string lookupId, out byte[] verificationHash)
     {
         lookupId = string.Empty;
-        secret = string.Empty;
+        verificationHash = [];
 
         if (!Request.Headers.TryGetValue("Authorization", out var values))
         {
@@ -77,15 +81,9 @@ public sealed class ApiClientAuthenticationHandler(
             return false;
         }
 
-        var credential = authorization[AuthorizationPrefix.Length..];
-        var parts = credential.Split('_', 3);
-        if (parts.Length != 3 || parts[0] != "nrk")
-        {
-            return false;
-        }
-
-        lookupId = parts[1];
-        secret = parts[2];
-        return lookupId.Length > 0 && secret.Length > 0;
+        return ApiKeyCredential.TryParse(
+            authorization[AuthorizationPrefix.Length..],
+            out lookupId,
+            out verificationHash);
     }
 }
