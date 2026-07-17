@@ -190,14 +190,11 @@ Run the full suite in an isolated test container and ephemeral PostgreSQL
 database:
 
 ```sh
-docker compose --profile test up --build \
-  --abort-on-container-exit \
-  --exit-code-from test \
-  test
+./scripts/run-container-tests.sh
 ```
 
-The command returns the test runner's exit code and stops the ephemeral test
-database when the suite finishes. Host-based `dotnet test NotifyRail.slnx`
+The script returns the test runner's exit code and removes the ephemeral test
+containers when the suite finishes. Host-based `dotnet test NotifyRail.slnx`
 remains available for development.
 
 Current validation:
