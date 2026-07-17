@@ -24,7 +24,7 @@ public static class GetMessageReportEndpoint
         MessageReportReader reader,
         CancellationToken cancellationToken)
     {
-        if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var apiClientId))
+        if (!ApiClientClaims.TryGetApiClientId(principal, out var apiClientId))
         {
             return Results.Unauthorized();
         }
