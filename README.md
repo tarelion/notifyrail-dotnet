@@ -275,8 +275,8 @@ docker compose down -v
 
 Start with [docs/README.md](docs/README.md).
 
-- [PRD](docs/prd-notifyrail.md): target MVP goals, boundaries, user stories,
-  and success criteria.
+- [PRD](docs/prd-notifyrail.md): completed and frozen MVP goals, boundaries,
+  user stories, and success criteria.
 - [HTTP API reference](docs/reference/http-api.md): implemented routes,
   payloads, responses, validation, and idempotency behavior.
 - [Delivery processing reference](docs/reference/delivery-processing.md):

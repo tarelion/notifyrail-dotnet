@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted.
+Superseded by ADR-0003 for the v2 API Client model. This decision remains the
+historical contract for the completed MVP.
 
 ## Context
 

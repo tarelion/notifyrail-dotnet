@@ -1,8 +1,11 @@
 # NotifyRail PRD
 
-> Status: Target MVP product requirements. For currently implemented behavior,
-> see the root [README](../README.md) and the
-> [HTTP API reference](reference/http-api.md).
+> Status: MVP completed and this requirements baseline was frozen on
+> 2026-07-17. Preserve this document as the record of the scope used to build
+> the initial version. For currently implemented behavior, see the root
+> [README](../README.md) and the
+> [HTTP API reference](reference/http-api.md). Future work belongs in GitHub
+> issues or a new versioned PRD.
 
 ## Purpose
 

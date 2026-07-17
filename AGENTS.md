@@ -66,3 +66,17 @@ Keep each commit focused and use a short imperative subject, for example
 Pull requests should explain behavior and motivation, list validation commands,
 and call out migrations or configuration changes. For HTTP changes, include a
 representative request and response.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default canonical triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This repository uses a single-context domain-doc layout. See `docs/agents/domain.md`.

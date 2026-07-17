@@ -6,8 +6,11 @@ current implementation and local workflow.
 
 ## Product Direction
 
-- [NotifyRail PRD](prd-notifyrail.md): target MVP goals, boundaries, user
-  stories, and success criteria. It is not an implementation-status page.
+- [NotifyRail PRD](prd-notifyrail.md): completed and frozen MVP goals,
+  boundaries, user stories, and success criteria. It is a historical baseline,
+  not an implementation-status page or roadmap.
+- [NotifyRail v2 PRD](prd-notifyrail-v2.md): planned API Client isolation,
+  reliable client webhooks, security, and observability milestone.
 
 ## Domain Language
 
@@ -32,11 +35,15 @@ current implementation and local workflow.
 
 - [Global idempotency key for the MVP](adr/0001-global-idempotency-key-for-mvp.md)
 - [Expose the OTP code in the mock send response](adr/0002-expose-otp-code-in-mock-send-response.md)
+- [Scope idempotency keys to API Clients](adr/0003-client-scoped-idempotency.md)
+- [Persist client webhooks with a transactional outbox](adr/0004-transactional-outbox-for-client-webhooks.md)
 
 ## Source-of-Truth Rules
 
 - Current capabilities and known gaps belong in the root `README.md`.
-- Product scope and non-goals belong in `docs/prd-notifyrail.md`.
+- The completed MVP scope and non-goals are frozen in
+  `docs/prd-notifyrail.md`.
+- Future work belongs in GitHub issues or a new versioned PRD.
 - Stable API and lifecycle contracts belong in `docs/reference/`.
 - Architecture decisions belong in `docs/adr/`.
 - Task plans and temporary progress notes must not redefine these contracts.
