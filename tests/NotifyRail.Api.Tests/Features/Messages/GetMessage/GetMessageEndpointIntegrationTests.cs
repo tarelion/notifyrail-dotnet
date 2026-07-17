@@ -2,12 +2,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using NotifyRail.Api.Features.Deliveries.Worker;
-using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Infrastructure.Persistence;
 
@@ -16,8 +14,6 @@ namespace NotifyRail.Api.Tests;
 public sealed class GetMessageEndpointIntegrationTests
     : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
-    private const string OperatorCredential = "get-message-test-operator-credential";
-
     private readonly WebApplicationFactory<Program> _factory;
 
     public GetMessageEndpointIntegrationTests(
@@ -25,8 +21,7 @@ public sealed class GetMessageEndpointIntegrationTests
     {
         _factory = factory
             .WithoutHostedServices()
-            .WithWebHostBuilder(builder =>
-                builder.UseSetting("Authentication:Operator:Credential", OperatorCredential));
+            .WithMessageApiAuthentication();
     }
 
     public void Dispose()
@@ -44,13 +39,31 @@ public sealed class GetMessageEndpointIntegrationTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("nrk_unknown_lookup_unknown_secret")]
+    public async Task GetMessage_ReturnsUnauthorizedWithoutResourceMetadata_WhenApiKeyIsInvalid(
+        string apiKey)
+    {
+        var messageId = Guid.NewGuid();
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("ApiKey", apiKey);
+
+        using var response = await client.GetAsync($"/messages/{messageId}");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.DoesNotContain(messageId.ToString(), body, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task GetMessage_ReturnsMessageSummary()
     {
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = await CreateAuthenticatedClientAsync();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Message");
         var scheduledAt = DateTimeOffset.UtcNow.AddMinutes(10);
         var receipt = await CreateMessageAsync(
             client,
@@ -93,7 +106,7 @@ public sealed class GetMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = await CreateAuthenticatedClientAsync();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Message");
         var receipt = await CreateMessageAsync(
             client,
             DateTimeOffset.UtcNow,
@@ -131,7 +144,7 @@ public sealed class GetMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = await CreateAuthenticatedClientAsync();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Message");
         using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 
@@ -145,8 +158,8 @@ public sealed class GetMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var ownerClient = await CreateAuthenticatedClientAsync();
-        using var otherClient = await CreateAuthenticatedClientAsync();
+        using var ownerClient = await _factory.CreateAuthenticatedMessageClientAsync("Message Owner");
+        using var otherClient = await _factory.CreateAuthenticatedMessageClientAsync("Other Client");
         var receipt = await CreateMessageAsync(
             ownerClient,
             DateTimeOffset.UtcNow,
@@ -186,24 +199,6 @@ public sealed class GetMessageEndpointIntegrationTests
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         await dbContext.Database.MigrateAsync();
-    }
-
-    private async Task<HttpClient> CreateAuthenticatedClientAsync()
-    {
-        using var operatorClient = _factory.CreateClient();
-        operatorClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Operator", OperatorCredential);
-        using var response = await operatorClient.PostAsJsonAsync(
-            "/management/api-clients",
-            new { name = $"Get Message {Guid.NewGuid()}" });
-        response.EnsureSuccessStatusCode();
-        var apiClient = await response.Content.ReadFromJsonAsync<CreateApiClientResponse>();
-        Assert.NotNull(apiClient);
-
-        var client = _factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("ApiKey", apiClient.ApiKey);
-        return client;
     }
 
     private async Task ResetDatabaseAsync()

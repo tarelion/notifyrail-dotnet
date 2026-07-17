@@ -31,7 +31,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     public MockProviderCallbackEndpointIntegrationTests(
         WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithWebHostBuilder(builder =>
+        _factory = factory.WithMessageApiAuthentication().WithWebHostBuilder(builder =>
         {
             builder.UseSetting(
                 "MockProviderCallback:Secret",
@@ -56,7 +56,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
 
         var callback = await ApplyCallbackAsync(
@@ -84,7 +84,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
 
         using var request = new HttpRequestMessage(
@@ -110,7 +110,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
         using var request = CreateSignedCallbackRequest(
             sentDelivery.ProviderMessageId,
@@ -135,7 +135,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
         using var request = CreateSignedCallbackRequest(
             sentDelivery.ProviderMessageId,
@@ -153,7 +153,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
         using var request = CreateSignedCallbackRequest(
             sentDelivery.ProviderMessageId,
@@ -172,7 +172,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
         const string wrongSecret = "secret-that-must-not-be-exposed";
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
         using var request = CreateSignedCallbackRequest(
             sentDelivery.ProviderMessageId,
@@ -205,7 +205,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
         using var request = CreateSignedCallbackRequest(
             sentDelivery.ProviderMessageId,
@@ -228,7 +228,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
         using var request = CreateSignedCallbackRequest(
             sentDelivery.ProviderMessageId,
@@ -247,7 +247,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
 
         var callback = await ApplyCallbackAsync(
@@ -272,7 +272,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
 
         var first = await ApplyCallbackAsync(
@@ -298,7 +298,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         var sentDelivery = await CreateSentDeliveryAsync(client);
         using var deliveredRequest = CreateSignedCallbackRequest(
             sentDelivery.ProviderMessageId,
@@ -331,7 +331,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         using var request = CreateSignedCallbackRequest("mock_unknown", "delivered");
         using var response = await client.SendAsync(request);
 
@@ -347,7 +347,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         using var request = CreateSignedCallbackRequest("mock_message", "queued");
         using var response = await client.SendAsync(request);
 
@@ -367,7 +367,7 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
         using var request = CreateSignedCallbackRequest(providerMessageId, "delivered");
         using var response = await client.SendAsync(request);
 

@@ -22,6 +22,7 @@ public sealed class ConfigurableMockProviderIntegrationTests
     {
         _factory = factory
             .WithoutHostedServices()
+            .WithMessageApiAuthentication()
             .WithWebHostBuilder(builder =>
             {
                 builder.ConfigureAppConfiguration((_, configuration) =>
@@ -49,7 +50,8 @@ public sealed class ConfigurableMockProviderIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync(
+            "Configurable Mock Provider");
         var receipt = await CreateMessageAsync(client);
 
         await using (var scope = _factory.Services.CreateAsyncScope())

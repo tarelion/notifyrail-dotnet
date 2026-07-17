@@ -1,12 +1,9 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Deliveries.Worker;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Infrastructure.Persistence;
@@ -16,8 +13,6 @@ namespace NotifyRail.Api.Tests;
 public sealed class GetMessageReportEndpointIntegrationTests
     : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
-    private const string OperatorCredential = "get-report-test-operator-credential";
-
     private readonly WebApplicationFactory<Program> _factory;
 
     public GetMessageReportEndpointIntegrationTests(
@@ -25,8 +20,7 @@ public sealed class GetMessageReportEndpointIntegrationTests
     {
         _factory = factory
             .WithoutHostedServices()
-            .WithWebHostBuilder(builder =>
-                builder.UseSetting("Authentication:Operator:Credential", OperatorCredential));
+            .WithMessageApiAuthentication();
     }
 
     public void Dispose()
@@ -50,7 +44,7 @@ public sealed class GetMessageReportEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = await CreateAuthenticatedClientAsync();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Report");
         var receipt = await CreateMessageAsync(client);
 
         await using (var scope = _factory.Services.CreateAsyncScope())
@@ -84,7 +78,7 @@ public sealed class GetMessageReportEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = await CreateAuthenticatedClientAsync();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Report");
         using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}/report");
         using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
 
@@ -98,8 +92,8 @@ public sealed class GetMessageReportEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var ownerClient = await CreateAuthenticatedClientAsync();
-        using var otherClient = await CreateAuthenticatedClientAsync();
+        using var ownerClient = await _factory.CreateAuthenticatedMessageClientAsync("Message Owner");
+        using var otherClient = await _factory.CreateAuthenticatedMessageClientAsync("Other Client");
         var receipt = await CreateMessageAsync(ownerClient);
 
         using var response = await otherClient.GetAsync($"/messages/{receipt.MessageId}/report");
@@ -135,24 +129,6 @@ public sealed class GetMessageReportEndpointIntegrationTests
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         await dbContext.Database.MigrateAsync();
-    }
-
-    private async Task<HttpClient> CreateAuthenticatedClientAsync()
-    {
-        using var operatorClient = _factory.CreateClient();
-        operatorClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Operator", OperatorCredential);
-        using var response = await operatorClient.PostAsJsonAsync(
-            "/management/api-clients",
-            new { name = $"Get Report {Guid.NewGuid()}" });
-        response.EnsureSuccessStatusCode();
-        var apiClient = await response.Content.ReadFromJsonAsync<CreateApiClientResponse>();
-        Assert.NotNull(apiClient);
-
-        var client = _factory.CreateClient();
-        client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("ApiKey", apiClient.ApiKey);
-        return client;
     }
 
     private async Task ResetDatabaseAsync()

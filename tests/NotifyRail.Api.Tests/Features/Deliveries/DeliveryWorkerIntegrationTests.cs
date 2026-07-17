@@ -26,8 +26,8 @@ public sealed class DeliveryWorkerIntegrationTests
 
     public DeliveryWorkerIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _hostedFactory = factory;
-        _manualFactory = factory.WithoutHostedServices();
+        _hostedFactory = factory.WithMessageApiAuthentication();
+        _manualFactory = _hostedFactory.WithoutHostedServices();
     }
 
     public void Dispose()
@@ -75,7 +75,8 @@ public sealed class DeliveryWorkerIntegrationTests
                     services.AddSingleton<IProviderSender, TransientlyFailingProvider>();
                 });
             });
-        using var client = factory.CreateClient();
+        using var client = await factory.CreateAuthenticatedMessageClientAsync(
+            "Transient Delivery Worker");
         await CreateMessageAsync(client);
 
         await using var scope = factory.Services.CreateAsyncScope();
@@ -110,7 +111,8 @@ public sealed class DeliveryWorkerIntegrationTests
                     services.AddSingleton<IProviderSender, TimingOutProvider>();
                 });
             });
-        using var client = factory.CreateClient();
+        using var client = await factory.CreateAuthenticatedMessageClientAsync(
+            "Timeout Delivery Worker");
         await CreateMessageAsync(client);
 
         await using var scope = factory.Services.CreateAsyncScope();
@@ -145,7 +147,8 @@ public sealed class DeliveryWorkerIntegrationTests
                 });
             });
         });
-        using var client = factory.CreateClient();
+        using var client = await factory.CreateAuthenticatedMessageClientAsync(
+            "Hosted Delivery Worker");
 
         await CreateMessageAsync(client);
 
@@ -199,7 +202,8 @@ public sealed class DeliveryWorkerIntegrationTests
 
     private async Task CreateMessageAsync()
     {
-        using var client = _manualFactory.CreateClient();
+        using var client = await _manualFactory.CreateAuthenticatedMessageClientAsync(
+            "Manual Delivery Worker");
         await CreateMessageAsync(client);
     }
 
