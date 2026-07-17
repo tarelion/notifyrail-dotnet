@@ -4,6 +4,7 @@ using NotifyRail.Api.Authentication;
 using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.ApiClients.DisableApiClient;
 using NotifyRail.Api.Features.Deliveries.ProviderCallbacks.Mock;
+using NotifyRail.Api.Features.Deliveries.ProviderCallbacks;
 using NotifyRail.Api.Features.Deliveries.Providers;
 using NotifyRail.Api.Features.Deliveries.Queue;
 using NotifyRail.Api.Features.Deliveries.Worker;
@@ -36,6 +37,13 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
         .ValidateOnStart();
     builder.Services.Configure<MockProviderOptions>(
         builder.Configuration.GetSection(MockProviderOptions.SectionName));
+    builder.Services.AddOptions<MockProviderCallbackOptions>()
+        .Bind(builder.Configuration.GetSection(MockProviderCallbackOptions.SectionName))
+        .Validate(options => !string.IsNullOrWhiteSpace(options.Secret),
+            "MockProviderCallback:Secret is required.")
+        .Validate(options => options.SignatureTolerance > TimeSpan.Zero,
+            "MockProviderCallback:SignatureTolerance must be greater than zero.")
+        .ValidateOnStart();
     builder.Services.AddOptions<OtpOptions>()
         .Bind(builder.Configuration.GetSection(OtpOptions.SectionName))
         .Validate(options => !string.IsNullOrWhiteSpace(options.Secret),
@@ -54,6 +62,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddScoped<DeliveryQueue>();
     builder.Services.AddScoped<DeliveryWorker>();
     builder.Services.AddScoped<MockProviderCallbackHandler>();
+    builder.Services.AddSingleton<IProviderCallbackVerifier, MockProviderCallbackVerifier>();
     builder.Services.AddHostedService<DeliveryWorkerBackgroundService>();
     builder.Services.AddScoped<MessageIntake>();
     builder.Services.AddScoped<MessageSummaryReader>();

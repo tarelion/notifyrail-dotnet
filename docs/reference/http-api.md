@@ -445,7 +445,28 @@ state and return `409 Conflict`.
 ## `POST /provider-callbacks/mock`
 
 Applies a final mock-provider status to the delivery identified by
-`provider_message_id`.
+`provider_message_id`. The endpoint accepts only callbacks authenticated with
+the mock provider callback secret; API Keys, Operator Credentials, and Webhook
+Secrets are not valid callback credentials.
+
+### Authentication Headers
+
+| Header | Required | Contract |
+| --- | --- | --- |
+| `X-Mock-Provider-Timestamp` | yes | Callback creation time as Unix seconds. The default acceptance window is five minutes before or after server time. |
+| `X-Mock-Provider-Signature` | yes | `v1=<lowercase-or-uppercase-hex-hmac>` where the HMAC is SHA-256 using the mock provider callback secret. |
+
+The signed bytes are the UTF-8 timestamp text, one period (`.`), and the exact
+request body bytes, with no canonicalization:
+
+```text
+HMAC-SHA256(secret, timestamp + "." + exact_request_body)
+```
+
+Missing, malformed, incorrect, tampered, future-dated, or stale authentication
+is rejected before JSON parsing or Delivery lookup. Authentication failures use
+the same generic response and do not disclose the configured secret, supplied
+signature, or timestamp.
 
 ### Request Body
 
@@ -497,6 +518,7 @@ Errors explicitly produced by the endpoint use this shape:
 
 | Status | Body | Condition |
 | --- | --- | --- |
+| `401 Unauthorized` | `{"error":"invalid provider callback authentication"}` | Either authentication header is missing or malformed, the signature does not match the exact body, or the timestamp falls outside the configured freshness window. |
 | `400 Bad Request` | `{"error":"provider_message_id is required"}` | Provider message ID is null, empty, or whitespace. |
 | `400 Bad Request` | `{"error":"status must be one of: delivered, failed"}` | Status is absent or unsupported. |
 | `404 Not Found` | `{"error":"provider message not found"}` | No delivery has the provider message ID. |
