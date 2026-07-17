@@ -24,7 +24,7 @@ public sealed class OtpSender(
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
-        var createdAt = TruncateToMicrosecond(timeProvider.GetUtcNow());
+        var createdAt = PostgresTimestamp.Normalize(timeProvider.GetUtcNow());
         var expiresAt = createdAt.Add(options.Value.Ttl);
         var challengeId = Guid.NewGuid();
         var debugCode = otpCode.Derive(challengeId);
@@ -129,10 +129,4 @@ public sealed class OtpSender(
             && postgresException.ConstraintName == IdempotencyKeyUniqueConstraint;
     }
 
-    private static DateTimeOffset TruncateToMicrosecond(DateTimeOffset value)
-    {
-        var utcValue = value.ToUniversalTime();
-        var ticks = utcValue.Ticks - utcValue.Ticks % 10;
-        return new DateTimeOffset(ticks, TimeSpan.Zero);
-    }
 }

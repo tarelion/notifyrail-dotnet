@@ -23,10 +23,10 @@ public sealed class MessageIntake
         CreateMessageCommand command,
         CancellationToken cancellationToken)
     {
-        var createdAt = TruncateToMicrosecond(DateTimeOffset.UtcNow);
+        var createdAt = PostgresTimestamp.Normalize(DateTimeOffset.UtcNow);
         var scheduledAt = command.ScheduledAt is null
             ? (DateTimeOffset?)null
-            : TruncateToMicrosecond(command.ScheduledAt.Value);
+            : PostgresTimestamp.Normalize(command.ScheduledAt.Value);
 
         var message = Message.Create(
             ApiClient.LegacyId,
@@ -148,17 +148,6 @@ public sealed class MessageIntake
         return left is null && right is null
             || left is not null
             && right is not null
-            && TruncateToMicrosecond(left.Value) == TruncateToMicrosecond(right.Value);
-    }
-
-    private static DateTimeOffset TruncateToMicrosecond(DateTimeOffset value)
-    {
-        // PostgreSQL timestamptz stores microseconds, while DateTimeOffset stores
-        // 100-nanosecond ticks. Normalize precision before persistence and replay
-        // comparison so the same instant does not produce an idempotency conflict.
-        var utcValue = value.ToUniversalTime();
-        var ticks = utcValue.Ticks - utcValue.Ticks % 10;
-
-        return new DateTimeOffset(ticks, TimeSpan.Zero);
+            && PostgresTimestamp.Normalize(left.Value) == PostgresTimestamp.Normalize(right.Value);
     }
 }

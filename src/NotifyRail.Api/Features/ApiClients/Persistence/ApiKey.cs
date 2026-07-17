@@ -11,7 +11,8 @@ public sealed class ApiKey
         string lookupId,
         byte[] verificationHash,
         string displayPrefix,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        DateTimeOffset? expiresAt = null)
     {
         return new ApiKey
         {
@@ -21,12 +22,18 @@ public sealed class ApiKey
             VerificationHash = verificationHash,
             DisplayPrefix = displayPrefix,
             CreatedAt = createdAt,
+            ExpiresAt = expiresAt,
         };
     }
 
     public void RecordUse(DateTimeOffset usedAt)
     {
         LastUsedAt = usedAt;
+    }
+
+    public void Revoke(DateTimeOffset revokedAt)
+    {
+        RevokedAt ??= revokedAt;
     }
 
     public Guid Id { get; private set; }

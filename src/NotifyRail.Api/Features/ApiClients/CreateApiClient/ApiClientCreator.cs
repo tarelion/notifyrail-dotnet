@@ -27,7 +27,9 @@ public sealed class ApiClientCreator(NotifyRailDbContext dbContext, TimeProvider
         return new CreateApiClientResponse(
             apiClient.Id,
             apiClient.Name,
+            apiKey.Id,
             credential.Plaintext,
+            apiKey.DisplayPrefix,
             apiClient.CreatedAt);
     }
 }
