@@ -1,3 +1,6 @@
+using System.Security.Claims;
+using NotifyRail.Api.Authentication;
+
 namespace NotifyRail.Api.Features.Messages.CreateMessage;
 
 public static class CreateMessageEndpoint
@@ -5,19 +8,27 @@ public static class CreateMessageEndpoint
     public static IEndpointRouteBuilder MapCreateMessageEndpoint(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/messages", CreateAsync)
+            .RequireAuthorization(AuthenticationPolicies.ApiClient)
             .WithName("CreateMessage")
             .Produces<CreateMessageResponse>(StatusCodes.Status202Accepted)
             .Produces<CreateMessageErrorResponse>(StatusCodes.Status400BadRequest)
-            .Produces<CreateMessageErrorResponse>(StatusCodes.Status409Conflict);
+            .Produces<CreateMessageErrorResponse>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status401Unauthorized);
 
         return endpoints;
     }
 
     private static async Task<IResult> CreateAsync(
         HttpRequest httpRequest,
+        ClaimsPrincipal principal,
         MessageIntake messageIntake,
         CancellationToken cancellationToken)
     {
+        if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var apiClientId))
+        {
+            return Results.Unauthorized();
+        }
+
         var readResult = await CreateMessageRequestReader.ReadAsync(
             httpRequest,
             cancellationToken);
@@ -34,7 +45,7 @@ public static class CreateMessageEndpoint
         }
 
         var command = normalization.Command!;
-        var outcome = await messageIntake.CreateAsync(command, cancellationToken);
+        var outcome = await messageIntake.CreateAsync(apiClientId, command, cancellationToken);
 
         return outcome.Kind switch
         {
