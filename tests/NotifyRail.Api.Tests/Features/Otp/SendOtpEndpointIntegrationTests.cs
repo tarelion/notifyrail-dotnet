@@ -144,6 +144,32 @@ public sealed class SendOtpEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task SendOtp_AllowsDifferentApiClientsToReuseIdempotencyKey()
+    {
+        await ResetDatabaseAsync();
+
+        using var firstClient = await _factory.CreateAuthenticatedMessageClientAsync("First OTP Client");
+        using var secondClient = await _factory.CreateAuthenticatedMessageClientAsync("Second OTP Client");
+        var request = new
+        {
+            recipient = "+905551111111",
+            idempotency_key = $"shared-otp-key-{Guid.NewGuid()}",
+        };
+
+        using var firstResponse = await firstClient.PostAsJsonAsync("/otp/send", request);
+        using var secondResponse = await secondClient.PostAsJsonAsync("/otp/send", request);
+
+        Assert.Equal(HttpStatusCode.Accepted, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, secondResponse.StatusCode);
+
+        using var firstBody = JsonDocument.Parse(await firstResponse.Content.ReadAsStreamAsync());
+        using var secondBody = JsonDocument.Parse(await secondResponse.Content.ReadAsStreamAsync());
+        Assert.NotEqual(
+            firstBody.RootElement.GetProperty("otp_id").GetGuid(),
+            secondBody.RootElement.GetProperty("otp_id").GetGuid());
+    }
+
+    [Fact]
     public async Task SendOtp_PersistsOnlyHashedCode()
     {
         await ResetDatabaseAsync();

@@ -1,3 +1,6 @@
+using System.Security.Claims;
+using NotifyRail.Api.Authentication;
+
 namespace NotifyRail.Api.Features.Otp.VerifyOtp;
 
 public static class VerifyOtpEndpoint
@@ -6,22 +9,30 @@ public static class VerifyOtpEndpoint
         this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/otp/verify", VerifyAsync)
+            .RequireAuthorization(AuthenticationPolicies.ApiClient)
             .WithName("VerifyOtp")
             .Produces<VerifyOtpResponse>(StatusCodes.Status200OK)
             .Produces<VerifyOtpErrorResponse>(StatusCodes.Status400BadRequest)
             .Produces<VerifyOtpErrorResponse>(StatusCodes.Status404NotFound)
             .Produces<VerifyOtpErrorResponse>(StatusCodes.Status409Conflict)
             .Produces<VerifyOtpErrorResponse>(StatusCodes.Status410Gone)
-            .Produces<VerifyOtpErrorResponse>(StatusCodes.Status429TooManyRequests);
+            .Produces<VerifyOtpErrorResponse>(StatusCodes.Status429TooManyRequests)
+            .Produces(StatusCodes.Status401Unauthorized);
 
         return endpoints;
     }
 
     private static async Task<IResult> VerifyAsync(
         VerifyOtpRequest request,
+        ClaimsPrincipal principal,
         OtpVerifier verifier,
         CancellationToken cancellationToken)
     {
+        if (!ApiClientClaims.TryGetApiClientId(principal, out var apiClientId))
+        {
+            return Results.Unauthorized();
+        }
+
         var code = request.Code?.Trim();
         if (request.OtpId is null || request.OtpId == Guid.Empty)
         {
@@ -34,6 +45,7 @@ public static class VerifyOtpEndpoint
         }
 
         var outcome = await verifier.VerifyAsync(
+            apiClientId,
             request.OtpId.Value,
             code,
             cancellationToken);

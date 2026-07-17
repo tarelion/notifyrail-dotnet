@@ -9,6 +9,7 @@ public sealed class OtpVerifier(
     TimeProvider timeProvider)
 {
     public async Task<VerifyOtpOutcome> VerifyAsync(
+        Guid apiClientId,
         Guid otpId,
         string code,
         CancellationToken cancellationToken)
@@ -18,7 +19,17 @@ public sealed class OtpVerifier(
 
         var challenges = await dbContext.OtpChallenges
             .FromSqlInterpolated(
-                $"SELECT * FROM otp_challenges WHERE id = {otpId} FOR UPDATE")
+                $"""
+                SELECT challenge.*
+                FROM otp_challenges AS challenge
+                WHERE challenge.id = {otpId}
+                  AND EXISTS (
+                      SELECT 1
+                      FROM messages AS message
+                      WHERE message.id = challenge.message_id
+                        AND message.api_client_id = {apiClientId})
+                FOR UPDATE
+                """)
             .ToArrayAsync(cancellationToken);
         var challenge = challenges.SingleOrDefault();
         if (challenge is null)

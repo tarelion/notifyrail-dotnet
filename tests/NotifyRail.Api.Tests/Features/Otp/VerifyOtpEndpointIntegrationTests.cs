@@ -16,7 +16,48 @@ public sealed class VerifyOtpEndpointIntegrationTests
 
     public VerifyOtpEndpointIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
+    }
+
+    [Fact]
+    public async Task VerifyOtp_RequiresApiClientAuthentication()
+    {
+        await ResetDatabaseAsync();
+
+        using var client = _factory.CreateClient();
+        using var response = await client.PostAsJsonAsync(
+            "/otp/verify",
+            new
+            {
+                otp_id = Guid.NewGuid(),
+                code = "123456",
+            });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task VerifyOtp_ReturnsNotFoundForAnotherApiClientsChallenge()
+    {
+        await ResetDatabaseAsync();
+
+        using var ownerClient = await _factory.CreateAuthenticatedMessageClientAsync("OTP Owner");
+        using var otherClient = await _factory.CreateAuthenticatedMessageClientAsync("Other OTP Client");
+        var challenge = await SendOtpAsync(ownerClient);
+
+        using var hiddenResponse = await VerifyAsync(
+            otherClient,
+            challenge.OtpId,
+            challenge.DebugCode);
+        using var ownerResponse = await VerifyAsync(
+            ownerClient,
+            challenge.OtpId,
+            challenge.DebugCode);
+
+        Assert.Equal(HttpStatusCode.NotFound, hiddenResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, ownerResponse.StatusCode);
     }
 
     public void Dispose()
@@ -29,7 +70,7 @@ public sealed class VerifyOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("OTP Verify");
         var challenge = await SendOtpAsync(client);
 
         using var response = await client.PostAsJsonAsync(
@@ -54,7 +95,7 @@ public sealed class VerifyOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("OTP One Time");
         var challenge = await SendOtpAsync(client);
         var request = new
         {
@@ -78,7 +119,7 @@ public sealed class VerifyOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Concurrent OTP Verify");
         var challenge = await SendOtpAsync(client);
         var request = new
         {
@@ -111,7 +152,7 @@ public sealed class VerifyOtpEndpointIntegrationTests
     {
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("OTP Attempt Limit");
         var challenge = await SendOtpAsync(client);
         var incorrectCode = challenge.DebugCode == "000000" ? "000001" : "000000";
 
@@ -156,7 +197,7 @@ public sealed class VerifyOtpEndpointIntegrationTests
 
         await ResetDatabaseAsync(factory.Services);
 
-        using var client = factory.CreateClient();
+        using var client = await factory.CreateAuthenticatedMessageClientAsync("Expired OTP");
         var challenge = await SendOtpAsync(client);
         timeProvider.Advance(TimeSpan.FromMinutes(6));
 
