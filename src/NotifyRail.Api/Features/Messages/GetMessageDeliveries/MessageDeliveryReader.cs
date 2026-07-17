@@ -6,12 +6,15 @@ namespace NotifyRail.Api.Features.Messages.GetMessageDeliveries;
 public sealed class MessageDeliveryReader(NotifyRailDbContext dbContext)
 {
     public async Task<GetMessageDeliveriesResponse?> ReadAsync(
+        Guid apiClientId,
         Guid messageId,
         CancellationToken cancellationToken)
     {
         var messageExists = await dbContext.Messages
             .AsNoTracking()
-            .AnyAsync(message => message.Id == messageId, cancellationToken);
+            .AnyAsync(
+                message => message.ApiClientId == apiClientId && message.Id == messageId,
+                cancellationToken);
         if (!messageExists)
         {
             return null;

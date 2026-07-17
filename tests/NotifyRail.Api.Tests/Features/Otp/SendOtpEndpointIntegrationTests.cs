@@ -51,17 +51,22 @@ public sealed class SendOtpEndpointIntegrationTests
         Assert.True(expiresAt > DateTimeOffset.UtcNow);
         Assert.Matches("^[0-9]{6}$", debugCode);
 
-        using var deliveriesResponse = await client.GetAsync(
-            $"/messages/{messageId}/deliveries");
-        using var deliveriesBody = JsonDocument.Parse(
-            await deliveriesResponse.Content.ReadAsStreamAsync());
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        var delivery = await dbContext.Deliveries
+            .AsNoTracking()
+            .Where(candidate => candidate.MessageId == messageId)
+            .Select(candidate => new
+            {
+                candidate.Recipient,
+                candidate.Status,
+                candidate.ExpiresAt,
+            })
+            .SingleAsync();
 
-        Assert.Equal(HttpStatusCode.OK, deliveriesResponse.StatusCode);
-        var delivery = Assert.Single(
-            deliveriesBody.RootElement.GetProperty("deliveries").EnumerateArray());
-        Assert.Equal("+905551111111", delivery.GetProperty("recipient").GetString());
-        Assert.Equal("queued", delivery.GetProperty("status").GetString());
-        Assert.Equal(expiresAt, delivery.GetProperty("expires_at").GetDateTimeOffset());
+        Assert.Equal("+905551111111", delivery.Recipient);
+        Assert.Equal("queued", delivery.Status);
+        Assert.Equal(expiresAt, delivery.ExpiresAt);
     }
 
     [Fact]

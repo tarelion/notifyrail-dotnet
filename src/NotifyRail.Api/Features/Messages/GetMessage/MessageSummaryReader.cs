@@ -6,12 +6,13 @@ namespace NotifyRail.Api.Features.Messages.GetMessage;
 public sealed class MessageSummaryReader(NotifyRailDbContext dbContext)
 {
     public async Task<GetMessageResponse?> ReadAsync(
+        Guid apiClientId,
         Guid messageId,
         CancellationToken cancellationToken)
     {
         var message = await dbContext.Messages
             .AsNoTracking()
-            .Where(message => message.Id == messageId)
+            .Where(message => message.ApiClientId == apiClientId && message.Id == messageId)
             .Select(message => new
             {
                 message.Id,

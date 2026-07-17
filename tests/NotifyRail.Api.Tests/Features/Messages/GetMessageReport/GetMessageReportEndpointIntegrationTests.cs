@@ -18,7 +18,9 @@ public sealed class GetMessageReportEndpointIntegrationTests
     public GetMessageReportEndpointIntegrationTests(
         WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
     }
 
     public void Dispose()
@@ -27,12 +29,22 @@ public sealed class GetMessageReportEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task GetMessageReport_ReturnsUnauthorized_WhenApiKeyIsMissing()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}/report");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task GetMessageReport_ReturnsDeliveryStatusCounts()
     {
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Report");
         var receipt = await CreateMessageAsync(client);
 
         await using (var scope = _factory.Services.CreateAsyncScope())
@@ -66,12 +78,27 @@ public sealed class GetMessageReportEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Report");
         using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}/report");
         using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("message not found", body.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task GetMessageReport_ReturnsNotFound_ForAnotherApiClientsMessage()
+    {
+        await EnsureDatabaseReadyAsync();
+        await ResetDatabaseAsync();
+
+        using var ownerClient = await _factory.CreateAuthenticatedMessageClientAsync("Message Owner");
+        using var otherClient = await _factory.CreateAuthenticatedMessageClientAsync("Other Client");
+        var receipt = await CreateMessageAsync(ownerClient);
+
+        using var response = await otherClient.GetAsync($"/messages/{receipt.MessageId}/report");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private static async Task<CreateMessageResponse> CreateMessageAsync(HttpClient client)

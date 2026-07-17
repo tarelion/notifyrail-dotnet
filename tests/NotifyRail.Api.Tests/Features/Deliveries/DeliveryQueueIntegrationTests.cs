@@ -16,7 +16,9 @@ public sealed class DeliveryQueueIntegrationTests
 
     public DeliveryQueueIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
     }
 
     public void Dispose()
@@ -507,7 +509,7 @@ public sealed class DeliveryQueueIntegrationTests
         string type = "transactional",
         DateTimeOffset? scheduledAt = null)
     {
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Delivery Queue");
         using var response = await client.PostAsJsonAsync(
             "/messages",
             new CreateMessageRequest(

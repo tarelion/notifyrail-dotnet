@@ -1,11 +1,13 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Messages.CreateMessage;
-using NotifyRail.Api.Features.ApiClients.Persistence;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Tests;
@@ -15,12 +17,16 @@ public sealed class CreateMessageEndpointIntegrationTests
 {
     private const string FailingRecipient = "__notifyrail_fail_delivery_insert__";
     private const int MaxCreateMessageBodyBytes = 1 << 20;
+    private const string OperatorCredential = "message-api-test-operator-credential";
 
     private readonly WebApplicationFactory<Program> _factory;
 
     public CreateMessageEndpointIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithWebHostBuilder(builder =>
+                builder.UseSetting("Authentication:Operator:Credential", OperatorCredential))
+            .WithoutHostedServices();
     }
 
     public void Dispose()
@@ -29,14 +35,27 @@ public sealed class CreateMessageEndpointIntegrationTests
     }
 
     [Fact]
-    public async Task CreateMessage_AssignsMessageToLegacyApiClient()
+    public async Task CreateMessage_ReturnsUnauthorized_WhenApiKeyIsMissing()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/messages",
+            ValidRequest($"missing-api-key-{Guid.NewGuid()}"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateMessage_AssignsMessageToAuthenticatedApiClient()
     {
         await EnsureDatabaseReadyAsync();
 
-        using var client = _factory.CreateClient();
+        var apiClient = await CreateApiClientAsync();
+        using var client = CreateApiKeyClient(apiClient.ApiKey);
         using var response = await client.PostAsJsonAsync(
             "/messages",
-            ValidRequest($"legacy-owner-{Guid.NewGuid()}"));
+            ValidRequest($"authenticated-owner-{Guid.NewGuid()}"));
         var receipt = await response.Content.ReadFromJsonAsync<CreateMessageResponse>();
 
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
@@ -50,7 +69,30 @@ public sealed class CreateMessageEndpointIntegrationTests
             .Select(message => message.ApiClientId)
             .SingleAsync();
 
-        Assert.Equal(ApiClient.LegacyId, apiClientId);
+        Assert.Equal(apiClient.ApiClientId, apiClientId);
+    }
+
+    [Fact]
+    public async Task CreateMessage_AllowsDifferentApiClientsToUseSameIdempotencyKey()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        var firstApiClient = await CreateApiClientAsync();
+        var secondApiClient = await CreateApiClientAsync();
+        using var firstClient = CreateApiKeyClient(firstApiClient.ApiKey);
+        using var secondClient = CreateApiKeyClient(secondApiClient.ApiKey);
+        var request = ValidRequest($"shared-{Guid.NewGuid()}");
+
+        using var firstResponse = await firstClient.PostAsJsonAsync("/messages", request);
+        using var secondResponse = await secondClient.PostAsJsonAsync("/messages", request);
+        var firstReceipt = await firstResponse.Content.ReadFromJsonAsync<CreateMessageResponse>();
+        var secondReceipt = await secondResponse.Content.ReadFromJsonAsync<CreateMessageResponse>();
+
+        Assert.Equal(HttpStatusCode.Accepted, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, secondResponse.StatusCode);
+        Assert.NotNull(firstReceipt);
+        Assert.NotNull(secondReceipt);
+        Assert.NotEqual(firstReceipt.MessageId, secondReceipt.MessageId);
     }
 
     [Fact]
@@ -58,7 +100,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     {
         await EnsureDatabaseReadyAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var request = ValidRequest($"concurrent-{Guid.NewGuid()}");
 
         var responses = await Task.WhenAll(
@@ -89,7 +131,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     {
         await EnsureDatabaseReadyAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var idempotencyKey = $"normalized-{Guid.NewGuid()}";
         var request = ValidRequest($" {idempotencyKey} ") with
         {
@@ -124,7 +166,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     {
         await EnsureDatabaseReadyAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var scheduledAt = new DateTimeOffset(
             2026,
             7,
@@ -161,7 +203,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     {
         await EnsureDatabaseReadyAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var request = ValidRequest($"invalid-duplicate-{Guid.NewGuid()}") with
         {
             Recipients = [" +905551111111 ", "+905551111111"],
@@ -180,7 +222,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     {
         await EnsureDatabaseReadyAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var request = ValidRequest($"invalid-type-{Guid.NewGuid()}") with
         {
             Type = "email",
@@ -222,7 +264,7 @@ public sealed class CreateMessageEndpointIntegrationTests
         """)]
     public async Task CreateMessage_ReturnsBadRequest_WhenJsonBodyIsInvalid(string body)
     {
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         using var response = await client.PostAsync(
             "/messages",
             new StringContent(body, Encoding.UTF8, "application/json"));
@@ -237,7 +279,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     [Fact]
     public async Task CreateMessage_ReturnsBadRequest_WhenJsonBodyExceedsSizeLimit()
     {
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var body = "{\"body\":\"" + new string('x', MaxCreateMessageBodyBytes) + "\"}";
 
         using var response = await client.PostAsync(
@@ -256,7 +298,7 @@ public sealed class CreateMessageEndpointIntegrationTests
     {
         await EnsureDatabaseReadyAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var body = $$"""
             {
                 "type":"transactional",
@@ -286,7 +328,7 @@ public sealed class CreateMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await InstallFailingDeliveryTriggerAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await CreateAuthenticatedClientAsync();
         var request = ValidRequest(
             $"partial-write-{Guid.NewGuid()}",
             recipients: ["+905551111111", FailingRecipient]);
@@ -314,6 +356,33 @@ public sealed class CreateMessageEndpointIntegrationTests
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         await dbContext.Database.MigrateAsync();
+    }
+
+    private async Task<CreateApiClientResponse> CreateApiClientAsync()
+    {
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Operator", OperatorCredential);
+        using var response = await client.PostAsJsonAsync(
+            "/management/api-clients",
+            new { name = $"Message API {Guid.NewGuid()}" });
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<CreateApiClientResponse>())!;
+    }
+
+    private HttpClient CreateApiKeyClient(string apiKey)
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("ApiKey", apiKey);
+        return client;
+    }
+
+    private async Task<HttpClient> CreateAuthenticatedClientAsync()
+    {
+        await EnsureDatabaseReadyAsync();
+        var apiClient = await CreateApiClientAsync();
+        return CreateApiKeyClient(apiClient.ApiKey);
     }
 
     private async Task InstallFailingDeliveryTriggerAsync()

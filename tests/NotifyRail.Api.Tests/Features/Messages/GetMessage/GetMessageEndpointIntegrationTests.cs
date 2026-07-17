@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -18,7 +19,9 @@ public sealed class GetMessageEndpointIntegrationTests
     public GetMessageEndpointIntegrationTests(
         WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
     }
 
     public void Dispose()
@@ -27,12 +30,40 @@ public sealed class GetMessageEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task GetMessage_ReturnsUnauthorized_WhenApiKeyIsMissing()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("malformed")]
+    [InlineData("nrk_unknown_lookup_unknown_secret")]
+    public async Task GetMessage_ReturnsUnauthorizedWithoutResourceMetadata_WhenApiKeyIsInvalid(
+        string apiKey)
+    {
+        var messageId = Guid.NewGuid();
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("ApiKey", apiKey);
+
+        using var response = await client.GetAsync($"/messages/{messageId}");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.DoesNotContain(messageId.ToString(), body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task GetMessage_ReturnsMessageSummary()
     {
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Message");
         var scheduledAt = DateTimeOffset.UtcNow.AddMinutes(10);
         var receipt = await CreateMessageAsync(
             client,
@@ -75,7 +106,7 @@ public sealed class GetMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Message");
         var receipt = await CreateMessageAsync(
             client,
             DateTimeOffset.UtcNow,
@@ -113,12 +144,30 @@ public sealed class GetMessageEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Message");
         using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 
         using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
         Assert.Equal("message not found", body.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task GetMessage_ReturnsNotFound_ForAnotherApiClientsMessage()
+    {
+        await EnsureDatabaseReadyAsync();
+        await ResetDatabaseAsync();
+
+        using var ownerClient = await _factory.CreateAuthenticatedMessageClientAsync("Message Owner");
+        using var otherClient = await _factory.CreateAuthenticatedMessageClientAsync("Other Client");
+        var receipt = await CreateMessageAsync(
+            ownerClient,
+            DateTimeOffset.UtcNow,
+            ["+905551111111"]);
+
+        using var response = await otherClient.GetAsync($"/messages/{receipt.MessageId}");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private static async Task<CreateMessageResponse> CreateMessageAsync(

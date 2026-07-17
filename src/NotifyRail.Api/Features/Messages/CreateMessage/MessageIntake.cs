@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NotifyRail.Api.Features.Deliveries.Persistence;
-using NotifyRail.Api.Features.ApiClients.Persistence;
 using NotifyRail.Api.Features.Messages.Persistence;
 using NotifyRail.Api.Infrastructure.Persistence;
 
@@ -20,6 +19,7 @@ public sealed class MessageIntake
     }
 
     public async Task<CreateMessageOutcome> CreateAsync(
+        Guid apiClientId,
         CreateMessageCommand command,
         CancellationToken cancellationToken)
     {
@@ -29,7 +29,7 @@ public sealed class MessageIntake
             : PostgresTimestamp.Normalize(command.ScheduledAt.Value);
 
         var message = Message.Create(
-            ApiClient.LegacyId,
+            apiClientId,
             command.Type,
             command.Channel,
             command.SenderTitle,
@@ -65,7 +65,7 @@ public sealed class MessageIntake
             // committed winner through this DbContext.
             _dbContext.ChangeTracker.Clear();
 
-            return await ReplayExistingMessageAsync(command, cancellationToken);
+            return await ReplayExistingMessageAsync(apiClientId, command, cancellationToken);
         }
 
         return CreateMessageOutcome.Accepted(new CreateMessageResponse(
@@ -82,15 +82,14 @@ public sealed class MessageIntake
     }
 
     private async Task<CreateMessageOutcome> ReplayExistingMessageAsync(
+        Guid apiClientId,
         CreateMessageCommand command,
         CancellationToken cancellationToken)
     {
         var existingMessage = await _dbContext.Messages
             .AsNoTracking()
             .SingleOrDefaultAsync(
-                // Existing data-plane behavior remains scoped to the legacy
-                // API Client until authentication is applied by a later slice.
-                message => message.ApiClientId == ApiClient.LegacyId
+                message => message.ApiClientId == apiClientId
                     && message.IdempotencyKey == command.IdempotencyKey,
                 cancellationToken);
 

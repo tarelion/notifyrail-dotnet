@@ -18,7 +18,9 @@ public sealed class GetMessageDeliveriesEndpointIntegrationTests
     public GetMessageDeliveriesEndpointIntegrationTests(
         WebApplicationFactory<Program> factory)
     {
-        _factory = factory.WithoutHostedServices();
+        _factory = factory
+            .WithMessageApiAuthentication()
+            .WithoutHostedServices();
     }
 
     public void Dispose()
@@ -27,12 +29,22 @@ public sealed class GetMessageDeliveriesEndpointIntegrationTests
     }
 
     [Fact]
+    public async Task GetMessageDeliveries_ReturnsUnauthorized_WhenApiKeyIsMissing()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}/deliveries");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task GetMessageDeliveries_ReturnsRecipientDeliveries()
     {
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Deliveries");
         var receipt = await CreateMessageAsync(
             client,
             ["+905551111111", "+905552222222"]);
@@ -68,7 +80,7 @@ public sealed class GetMessageDeliveriesEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Deliveries");
         var receipt = await CreateMessageAsync(client, ["+905551111111"]);
 
         await using (var scope = _factory.Services.CreateAsyncScope())
@@ -114,12 +126,28 @@ public sealed class GetMessageDeliveriesEndpointIntegrationTests
         await EnsureDatabaseReadyAsync();
         await ResetDatabaseAsync();
 
-        using var client = _factory.CreateClient();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Get Deliveries");
         using var response = await client.GetAsync($"/messages/{Guid.NewGuid()}/deliveries");
         using var body = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("message not found", body.RootElement.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task GetMessageDeliveries_ReturnsNotFound_ForAnotherApiClientsMessage()
+    {
+        await EnsureDatabaseReadyAsync();
+        await ResetDatabaseAsync();
+
+        using var ownerClient = await _factory.CreateAuthenticatedMessageClientAsync("Message Owner");
+        using var otherClient = await _factory.CreateAuthenticatedMessageClientAsync("Other Client");
+        var receipt = await CreateMessageAsync(ownerClient, ["+905551111111"]);
+
+        using var response = await otherClient.GetAsync(
+            $"/messages/{receipt.MessageId}/deliveries");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private static async Task<CreateMessageResponse> CreateMessageAsync(

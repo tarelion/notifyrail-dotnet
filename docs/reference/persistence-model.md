@@ -177,8 +177,9 @@ Cross-table OTP invariants:
 ## Cross-Table Invariants
 
 - Generic Message creation inserts one Message and all of its Deliveries in one
-  transaction.
-- Existing and not-yet-migrated data-plane writes use the legacy API Client.
+  transaction and assigns the authenticated API Client as owner.
+- OTP writes continue to use the legacy API Client until the OTP API is
+  migrated.
 - A Message cannot contain duplicate normalized recipients because
   `(message_id, recipient)` is unique.
 - Provider-result recording inserts an Attempt and updates its Delivery in one

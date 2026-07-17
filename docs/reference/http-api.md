@@ -34,13 +34,12 @@ NotifyRail registers separate replaceable authentication schemes and policies:
 | Identity | Authorization header | Policy | Current routes |
 | --- | --- | --- | --- |
 | Operator | `Authorization: Operator <credential>` | `Operator` | `/management/*` |
-| API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | `GET /api-client`; registered for later Message and OTP migration. |
+| API Client | `Authorization: ApiKey nrk_<lookup_id>_<secret>` | `ApiClient` | `GET /api-client`, `POST /messages`, and all `GET /messages/{message_id}/*` routes. |
 
 The Operator credential is configured at
 `Authentication:Operator:Credential` and must be non-blank at application
-startup. API Client credentials cannot satisfy the Operator policy. Existing
-MVP data-plane routes remain unprotected and use legacy ownership until their
-migration tickets are implemented.
+startup. API Client credentials cannot satisfy the Operator policy. OTP routes
+continue to use legacy ownership until their migration ticket is implemented.
 
 ## `GET /api-client`
 
@@ -221,6 +220,8 @@ readiness check. It does not verify that migrations are current.
 ## `POST /messages`
 
 Atomically creates one message and one delivery for each recipient.
+Requires the `ApiClient` policy, and the new Message belongs to the
+authenticated API Client.
 
 ### Request Body
 
@@ -231,7 +232,7 @@ Atomically creates one message and one delivery for each recipient.
 | `sender_title` | string | yes | Trimmed before storage; must not be empty. |
 | `body` | string | yes | Must contain at least one non-whitespace character. |
 | `recipients` | array of strings | yes | Must contain at least one non-empty, unique recipient. Values are trimmed before storage. |
-| `idempotency_key` | string | yes | Trimmed before storage; globally unique for the MVP. |
+| `idempotency_key` | string | yes | Trimmed before storage; unique within the authenticated API Client. |
 | `scheduled_at` | RFC 3339 timestamp or `null` | no | Normalized to UTC before storage. A due-delivery claim will not select it before this instant. |
 | `report_label` | string or `null` | no | Trimmed before storage. |
 | `encoding` | string or `null` | no | When present, one of `latin`, `turkish`, or `unicode`. |
@@ -258,9 +259,8 @@ partial set of deliveries must not be persisted.
 
 ### Idempotency
 
-The current unauthenticated MVP endpoint assigns Messages to the legacy API
-Client. Its `idempotency_key` behavior therefore remains effectively global
-until a later ticket applies the authenticated API Client identity.
+Idempotency is scoped to the authenticated API Client. Different API Clients
+may use the same key without conflicting.
 
 - Repeating the same normalized request with the same key returns
   `202 Accepted` and the original receipt; it creates no new rows.
@@ -268,9 +268,8 @@ until a later ticket applies the authenticated API Client identity.
 - Reusing the key with different message content, options, or recipients
   returns `409 Conflict`.
 
-The database constraint is already scoped to `(api_client_id, idempotency_key)`;
-authenticated cross-client reuse becomes observable when the data-plane route
-is migrated.
+The database enforces the same boundary with the unique constraint over
+`(api_client_id, idempotency_key)`.
 
 ### Error Responses
 
@@ -282,6 +281,7 @@ Validation and idempotency errors use this shape:
 
 | Status | Body contract | Condition |
 | --- | --- | --- |
+| `401 Unauthorized` | No application-level body contract. | The API Key is missing, malformed, unknown, expired, or revoked. |
 | `400 Bad Request` | `{"error":"description"}` | Invalid JSON body or invalid normalized input. |
 | `409 Conflict` | `{"error":"description"}` | The idempotency key already belongs to a different normalized request. |
 | `500 Internal Server Error` | No application-level contract. | An unexpected internal or persistence failure escaped the handler. ASP.NET Core produces the response. |
@@ -290,6 +290,7 @@ Validation and idempotency errors use this shape:
 
 ```sh
 curl --request POST http://localhost:5012/messages \
+  --header 'Authorization: ApiKey nrk_<lookup_id>_<secret>' \
   --header 'Content-Type: application/json' \
   --data '{
     "type": "transactional",
@@ -307,6 +308,8 @@ Returns message metadata together with aggregate delivery status counts.
 `message_id` must be a UUID. The endpoint does not return individual
 recipient deliveries or provider attempt history; use
 `GET /messages/{message_id}/deliveries` for that detail.
+Requires the `ApiClient` policy and returns only a Message owned by the
+authenticated API Client.
 
 ### Success Response
 
@@ -372,7 +375,8 @@ equals the sum of `queued`, `processing`, `sent`, `delivered`,
 
 ### Error Response
 
-If no message has the requested UUID:
+Missing or invalid API Keys return `401 Unauthorized`. If no owned Message has
+the requested UUID, including when another API Client owns it:
 
 - Status: `404 Not Found`
 
@@ -383,7 +387,8 @@ If no message has the requested UUID:
 ## `GET /messages/{message_id}/deliveries`
 
 Returns every recipient delivery for a message together with its provider
-attempt history. `message_id` must be a UUID.
+attempt history. `message_id` must be a UUID. Requires the `ApiClient` policy
+and returns Deliveries only when the authenticated API Client owns the Message.
 
 Deliveries are ordered by `created_at` and then `delivery_id`. Attempts within
 each delivery are ordered by `attempt_number`.
@@ -451,7 +456,8 @@ each delivery are ordered by `attempt_number`.
 
 ### Error Response
 
-If no message has the requested UUID:
+Missing or invalid API Keys return `401 Unauthorized`. If no owned Message has
+the requested UUID, including when another API Client owns it:
 
 - Status: `404 Not Found`
 
@@ -637,7 +643,8 @@ not currently have an application-level JSON error contract.
 
 Returns aggregate delivery counts for a message. `message_id` must be a UUID.
 The endpoint calculates counts in PostgreSQL and does not return individual
-delivery or attempt records.
+delivery or attempt records. Requires the `ApiClient` policy and reports only
+when the authenticated API Client owns the Message.
 
 ### Success Response
 
@@ -677,7 +684,8 @@ and `expired`.
 
 ### Error Response
 
-If no message has the requested UUID:
+Missing or invalid API Keys return `401 Unauthorized`. If no owned Message has
+the requested UUID, including when another API Client owns it:
 
 - Status: `404 Not Found`
 
