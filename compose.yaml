@@ -15,5 +15,69 @@ services:
       timeout: 5s
       retries: 10
 
+  migrate:
+    image: notifyrail-api:local
+    command: ["--migrate"]
+    environment:
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: notifyrail-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail
+      Logging__LogLevel__Microsoft.EntityFrameworkCore: Warning
+      Otp__Secret: ${NOTIFYRAIL_OTP_SECRET:-notifyrail-local-compose-secret-change-me}
+    ports:
+      - "127.0.0.1:5012:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  test-postgres:
+    profiles: ["test"]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: notifyrail_tests
+      POSTGRES_USER: notifyrail
+      POSTGRES_PASSWORD: notifyrail
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifyrail -d notifyrail_tests"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  test:
+    profiles: ["test"]
+    image: notifyrail-tests:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test
+    environment:
+      ConnectionStrings__Postgres: Host=test-postgres;Port=5432;Database=notifyrail_tests;Username=notifyrail;Password=notifyrail
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:

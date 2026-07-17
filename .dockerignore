@@ -1,0 +1,14 @@
+.git
+.gitignore
+.idea
+.vs
+.vscode
+**/bin
+**/obj
+**/TestResults
+coverage
+coverage.*
+docs
+infographic
+scripts
+*.md

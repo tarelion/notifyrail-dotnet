@@ -17,8 +17,9 @@ namespace NotifyRail.Api.Tests;
 public sealed class DeliveryWorkerIntegrationTests
     : IClassFixture<WebApplicationFactory<Program>>, IDisposable
 {
-    private const string PostgresConnectionString =
-        "Host=localhost;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail";
+    private static string PostgresConnectionString =>
+        Environment.GetEnvironmentVariable("ConnectionStrings__Postgres")
+        ?? "Host=localhost;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail";
 
     private readonly WebApplicationFactory<Program> _hostedFactory;
     private readonly WebApplicationFactory<Program> _manualFactory;

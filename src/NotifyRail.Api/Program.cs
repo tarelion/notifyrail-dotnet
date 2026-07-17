@@ -60,6 +60,14 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
 
 var app = builder.Build();
 
+if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+    await dbContext.Database.MigrateAsync();
+    return;
+}
+
 app.MapHealthEndpoints();
 app.MapCreateMessageEndpoint();
 app.MapGetMessageEndpoint();

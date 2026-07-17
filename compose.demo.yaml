@@ -1,0 +1,11 @@
+services:
+  api:
+    environment:
+      DeliveryWorker__BatchSize: 3
+      DeliveryWorker__PollInterval: 00:00:00.250
+      DeliveryQueue__BaseRetryDelay: 00:00:03
+      MockProvider__Rules__0__Recipient: "+905552222222"
+      MockProvider__Rules__0__Outcomes__0: retryable_failure
+      MockProvider__Rules__0__Outcomes__1: accepted
+      MockProvider__Rules__1__Recipient: "+905553333333"
+      MockProvider__Rules__1__Outcomes__0: permanent_failure

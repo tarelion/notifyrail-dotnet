@@ -30,13 +30,11 @@ Run the demo locally:
 
 ```sh
 ./scripts/run-demo-api.sh
-```
-
-In another terminal:
-
-```sh
 ./scripts/demo-flow.sh
 ```
+
+The first command builds the API image, starts PostgreSQL, applies migrations,
+and waits for the containerized API to become ready.
 
 Regenerate the GIF after changing the script:
 
@@ -77,7 +75,7 @@ paths easy to demonstrate.
 | Queue | PostgreSQL row locking with `FOR UPDATE SKIP LOCKED` |
 | Background work | ASP.NET Core hosted service |
 | Tests | xUnit integration and unit tests |
-| Local runtime | Docker Compose for PostgreSQL |
+| Local runtime | Docker Compose for the API, migration job, and PostgreSQL |
 
 ## Current API Surface
 
@@ -98,8 +96,8 @@ The canonical HTTP contract is in
 
 ## Requirements
 
-- .NET SDK 10.0.x
-- Docker, for local PostgreSQL
+- Docker with Compose, for running the complete stack
+- .NET SDK 10.0.x, only for host-based development and tests
 - `jq`, for the demo script
 - `vhs`, only if you want to regenerate `docs/assets/demo-flow.gif`
 
@@ -111,31 +109,34 @@ sudo pacman -S --needed dotnet-sdk aspnet-runtime aspnet-targeting-pack docker j
 
 ## Run Locally
 
-Start PostgreSQL:
+Build the API image, start PostgreSQL, apply migrations, and wait for the API:
 
 ```sh
-docker compose up -d --wait postgres
+docker compose up --detach --build --wait api
 ```
 
-Apply EF Core migrations:
-
-```sh
-dotnet tool restore
-dotnet ef database update --project src/NotifyRail.Api
-```
-
-Start the API:
-
-```sh
-dotnet run --project src/NotifyRail.Api
-```
-
-Check the service:
+The API is available at `http://localhost:5012`. Check both health endpoints:
 
 ```sh
 curl http://localhost:5012/healthz
 curl http://localhost:5012/readyz
 ```
+
+Follow the API logs:
+
+```sh
+docker compose logs --follow api
+```
+
+Stop the complete stack:
+
+```sh
+docker compose down
+```
+
+The `migrate` service uses the same application image, applies pending EF Core
+migrations once, and exits. Compose starts the API only after PostgreSQL is
+healthy and the migration service succeeds.
 
 Create a message:
 
@@ -185,12 +186,19 @@ the MVP does not send real SMS messages; PostgreSQL stores only the code hash.
 
 ## Tests
 
-Run the full suite:
+Run the full suite in an isolated test container and ephemeral PostgreSQL
+database:
 
 ```sh
-docker compose up -d --wait postgres
-dotnet test NotifyRail.slnx
+docker compose --profile test up --build \
+  --abort-on-container-exit \
+  --exit-code-from test \
+  test
 ```
+
+The command returns the test runner's exit code and stops the ephemeral test
+database when the suite finishes. Host-based `dotnet test NotifyRail.slnx`
+remains available for development.
 
 Current validation:
 
@@ -213,6 +221,16 @@ configuration expects:
 Host=localhost;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail
 ```
 
+For host-based development, start only PostgreSQL, apply migrations, and run
+the API with the .NET SDK:
+
+```sh
+docker compose up -d --wait postgres
+dotnet tool restore
+dotnet ef database update --project src/NotifyRail.Api
+dotnet run --project src/NotifyRail.Api
+```
+
 Useful commands:
 
 ```sh
@@ -229,7 +247,7 @@ dotnet ef migrations add <MigrationName> --project src/NotifyRail.Api
 dotnet ef database update --project src/NotifyRail.Api
 ```
 
-Stop PostgreSQL:
+Stop all Compose services:
 
 ```sh
 docker compose down
