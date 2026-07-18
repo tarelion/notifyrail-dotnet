@@ -240,16 +240,23 @@ and does not return the Webhook Secret again.
 | --- | --- |
 | `201 Created` | The API Client's first endpoint and initial secret are created. |
 | `200 OK` | A new endpoint replaces a previous active or disabled endpoint; the existing secret is not returned. |
-| `400 Bad Request` | `url` is not an absolute HTTP(S) URL, contains user information or a fragment, uses public HTTP, or violates the localhost policy. |
+| `400 Bad Request` | `url` is not an absolute HTTP(S) URL, contains user information or a fragment, uses public HTTP, cannot be resolved, has any non-public DNS answer, or violates the localhost policy. |
 | `401 Unauthorized` | The Operator credential is missing or invalid. |
 | `404 Not Found` | The API Client does not exist. |
 
 Public endpoint URLs require HTTPS. Localhost names and loopback IP addresses,
 including equivalent trailing-dot and IPv4-mapped IPv6 forms, are rejected unless
 `Webhooks:AllowLocalhostEndpoints` is explicitly `true`; with that setting,
-HTTP or HTTPS loopback URLs are accepted for development and tests. Complete
-address and DNS validation at dispatch time is not part of this configuration
-operation yet.
+HTTP or HTTPS loopback URLs are accepted for development and tests. This
+exception applies only to the `localhost` name and loopback literals; another
+DNS name resolving to loopback remains invalid.
+
+NotifyRail resolves hostname endpoints during this operation. Every IPv4 or
+IPv6 answer must be public; an empty result or any loopback, private, link-local,
+multicast, unspecified, documentation, benchmark, carrier-grade NAT, or cloud
+metadata address rejects the complete configuration. Mixed public and unsafe
+answers fail closed. Validation errors use bounded policy text and do not echo
+the URL, hostname, query string, or resolved addresses.
 
 Registering or replacing an endpoint does not create Webhook Events for
 historical Delivery transitions.

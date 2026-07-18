@@ -54,6 +54,16 @@ public sealed class WebhookDispatcher(
                     ? ParseRetryAfter(response)
                     : null);
         }
+        catch (Exception exception) when (ContainsUnsafeEndpointFailure(exception))
+        {
+            stopwatch.Stop();
+            return new WebhookResult(
+                WebhookOutcome.PermanentFailure,
+                HttpStatusCode: null,
+                stopwatch.ElapsedMilliseconds,
+                "unsafe_endpoint",
+                "Webhook endpoint resolved to a prohibited network destination.");
+        }
         catch (Exception exception) when (
             exception is HttpRequestException or TimeoutException or TaskCanceledException)
         {
@@ -74,6 +84,19 @@ public sealed class WebhookDispatcher(
                 errorCode,
                 errorMessage);
         }
+    }
+
+    private static bool ContainsUnsafeEndpointFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is UnsafeWebhookEndpointException)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string Sign(string secret, string timestamp, string body)

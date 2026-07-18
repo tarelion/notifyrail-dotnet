@@ -53,7 +53,7 @@ vhs scripts/demo-flow.tape
 | Retry/backoff | Retryable provider failures schedule `next_attempt_at`; permanent failures stop immediately. |
 | Attempt history | Every provider send attempt is persisted and exposed through the API. |
 | Provider callbacks | Mock callbacks safely finalize `sent` deliveries without regressing terminal states. |
-| Client webhooks | Client-visible `sent`, `delivered`, `failed`, and `expired` transitions atomically create ordered Webhook Events; a separate PostgreSQL-backed worker sends exact signed payloads, records each attempt, and retries transient failures with bounded exponential backoff. |
+| Client webhooks | Client-visible `sent`, `delivered`, `failed`, and `expired` transitions atomically create ordered Webhook Events; a separate PostgreSQL-backed worker sends exact signed payloads, records each attempt, retries transient failures with bounded exponential backoff, and blocks SSRF through public-address validation at configuration and connection time. |
 | OTP | OTP send is idempotent; verification is hashed, TTL-bound, one-time, and concurrency-safe. |
 | Reporting | Message summary and report endpoints expose aggregate delivery status counts. |
 
@@ -213,7 +213,7 @@ remains available for development.
 Current validation:
 
 ```text
-Passed: 170
+Passed: 194
 Failed: 0
 Skipped: 0
 ```
@@ -221,7 +221,8 @@ Skipped: 0
 The tests cover message idempotency, delivery and webhook queue claiming,
 priority ordering, retry/backoff, stale claim recovery, provider callbacks,
 signed real-HTTP webhook dispatch, delivery reporting, OTP TTL, OTP one-time
-verification, and concurrency-sensitive behavior.
+verification, Webhook Endpoint address policy, DNS rebinding protection,
+redirect refusal, and concurrency-sensitive behavior.
 
 ## Development Notes
 
@@ -231,6 +232,12 @@ configuration expects:
 ```text
 Host=localhost;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail
 ```
+
+Production-like configuration accepts only public HTTPS Webhook Endpoints.
+`appsettings.Development.json` explicitly enables
+`Webhooks:AllowLocalhostEndpoints` so the local receiver and integration tests
+can use HTTP loopback endpoints; keep this setting absent or `false` outside
+development and test environments.
 
 For host-based development, start only PostgreSQL, apply migrations, and run
 the API with the .NET SDK:

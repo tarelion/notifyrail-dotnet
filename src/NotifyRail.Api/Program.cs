@@ -101,6 +101,9 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
         .ValidateOnStart();
     builder.Services.AddSingleton<IWebhookRetryJitter, RandomWebhookRetryJitter>();
     builder.Services.AddSingleton<IWebhookSecretProtector, DataProtectionWebhookSecretProtector>();
+    builder.Services.AddSingleton<IWebhookDnsResolver, SystemWebhookDnsResolver>();
+    builder.Services.AddSingleton<WebhookEndpointAddressPolicy>();
+    builder.Services.AddSingleton<WebhookConnectionFactory>();
     builder.Services.AddSingleton<WebhookEndpointUrlValidator>();
     builder.Services.AddScoped<WebhookEndpointRegistrar>();
     builder.Services.AddScoped<WebhookEndpointReader>();
@@ -111,9 +114,13 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
         client.Timeout = serviceProvider
             .GetRequiredService<IOptions<WebhookWorkerOptions>>()
             .Value.RequestTimeout)
-        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        .ConfigurePrimaryHttpMessageHandler(serviceProvider => new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
+            UseProxy = false,
+            ConnectCallback = serviceProvider
+                .GetRequiredService<WebhookConnectionFactory>()
+                .ConnectAsync,
         });
     builder.Services.AddScoped<WebhookWorker>();
     builder.Services.AddScoped<ApiClientCreator>();

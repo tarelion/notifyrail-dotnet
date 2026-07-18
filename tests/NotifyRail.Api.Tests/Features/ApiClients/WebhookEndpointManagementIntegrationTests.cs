@@ -9,6 +9,9 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using NotifyRail.Api.Features.Webhooks;
+using NotifyRail.Api.Features.Webhooks.Dispatch;
+using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Infrastructure.Persistence;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Features.Webhooks.Persistence;
@@ -26,9 +29,14 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     {
         _factory = new WebApplicationFactory<Program>()
             .WithoutHostedServices()
-            .WithWebHostBuilder(builder => builder.UseSetting(
-                "Authentication:Operator:Credential",
-                OperatorCredential));
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseSetting(
+                    "Authentication:Operator:Credential",
+                    OperatorCredential);
+                builder.UseSetting("Webhooks:AllowLocalhostEndpoints", "false");
+                builder.ConfigureServices(UsePublicDnsAnswer);
+            });
     }
 
     public void Dispose()
@@ -316,6 +324,149 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task RegisterWebhookEndpoint_RejectsDnsNameResolvingToLoopback_WhenLocalhostIsEnabled()
+    {
+        using var factory = CreateFactory(services =>
+        {
+            services.RemoveAll<IWebhookDnsResolver>();
+            services.AddSingleton<IWebhookDnsResolver>(new StubWebhookDnsResolver(
+                IPAddress.Loopback));
+        }, allowLocalhostEndpoints: true);
+        await EnsureDatabaseReadyAsync(factory);
+
+        using var client = CreateOperatorClient(factory);
+        var apiClient = await CreateApiClientAsync(client);
+        using var response = await client.PutAsJsonAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint",
+            new { url = "https://not-localhost.example/webhooks" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RegisterWebhookEndpoint_AllowsPublicIpv6Address()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = CreateOperatorClient();
+        var apiClient = await CreateApiClientAsync(client);
+        using var response = await client.PutAsJsonAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint",
+            new { url = "https://[2606:4700:4700::1111]/webhooks" });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("https://0.0.0.0/webhooks")]
+    [InlineData("https://10.20.30.40/webhooks")]
+    [InlineData("https://169.254.169.254/latest/meta-data")]
+    [InlineData("https://172.16.0.1/webhooks")]
+    [InlineData("https://192.168.1.1/webhooks")]
+    [InlineData("https://192.88.99.2/webhooks")]
+    [InlineData("https://224.0.0.1/webhooks")]
+    [InlineData("https://[::]/webhooks")]
+    [InlineData("https://[fc00::1]/webhooks")]
+    [InlineData("https://[fe80::1]/webhooks")]
+    [InlineData("https://[ff02::1]/webhooks")]
+    [InlineData("https://[::ffff:10.0.0.1]/webhooks")]
+    [InlineData("https://[64:ff9b:1::1]/webhooks")]
+    [InlineData("https://[2001:2::1]/webhooks")]
+    [InlineData("https://[2001:5::1]/webhooks")]
+    [InlineData("https://[2001:db8::1]/webhooks")]
+    [InlineData("https://[2002:a00:1::]/webhooks")]
+    [InlineData("https://[3fff::1]/webhooks")]
+    [InlineData("https://[5f00::1]/webhooks")]
+    public async Task RegisterWebhookEndpoint_RejectsNonPublicAddress(string url)
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = CreateOperatorClient();
+        var apiClient = await CreateApiClientAsync(client);
+        using var response = await client.PutAsJsonAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint",
+            new { url });
+        var error = await response.Content
+            .ReadFromJsonAsync<RegisterWebhookEndpointErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(error);
+        Assert.Equal("url host must resolve only to public addresses", error.Error);
+        Assert.DoesNotContain(new Uri(url).Host, error.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RegisterWebhookEndpoint_RejectsMixedPublicAndPrivateDnsAnswers()
+    {
+        using var factory = CreateFactory(services =>
+        {
+            services.RemoveAll<IWebhookDnsResolver>();
+            services.AddSingleton<IWebhookDnsResolver>(new StubWebhookDnsResolver(
+                IPAddress.Parse("93.184.216.34"),
+                IPAddress.Parse("10.0.0.8")));
+        });
+        await EnsureDatabaseReadyAsync(factory);
+
+        using var client = CreateOperatorClient(factory);
+        var apiClient = await CreateApiClientAsync(client);
+        const string url = "https://mixed-answers.example/webhooks?token=secret";
+        using var response = await client.PutAsJsonAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint",
+            new { url });
+        var error = await response.Content
+            .ReadFromJsonAsync<RegisterWebhookEndpointErrorResponse>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.NotNull(error);
+        Assert.Equal("url host must resolve only to public addresses", error.Error);
+        Assert.DoesNotContain("mixed-answers", error.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", error.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("10.0.0.8", error.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WebhookDispatcher_RejectsDnsRebindingAfterEndpointRegistration()
+    {
+        using var factory = CreateFactory(services =>
+        {
+            services.RemoveAll<IWebhookDnsResolver>();
+            services.AddSingleton<IWebhookDnsResolver>(new SequenceWebhookDnsResolver(
+                [IPAddress.Parse("93.184.216.34")],
+                [IPAddress.Parse("93.184.216.34"), IPAddress.Parse("10.0.0.8")]));
+        });
+        await EnsureDatabaseReadyAsync(factory);
+
+        using var client = CreateOperatorClient(factory);
+        var apiClient = await CreateApiClientAsync(client);
+        const string url = "https://rebind.example/webhooks?token=secret";
+        using var registration = await client.PutAsJsonAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint",
+            new { url });
+        Assert.Equal(HttpStatusCode.Created, registration.StatusCode);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var protector = scope.ServiceProvider.GetRequiredService<IWebhookSecretProtector>();
+        var dispatcher = scope.ServiceProvider.GetRequiredService<WebhookDispatcher>();
+        var result = await dispatcher.SendAsync(
+            new WebhookRequest(
+                Guid.NewGuid(),
+                url,
+                "{}",
+                protector.Protect("nrs_test-secret")),
+            DateTimeOffset.UtcNow,
+            CancellationToken.None);
+
+        Assert.Equal(WebhookOutcome.PermanentFailure, result.Outcome);
+        Assert.Equal("unsafe_endpoint", result.ErrorCode);
+        Assert.Equal(
+            "Webhook endpoint resolved to a prohibited network destination.",
+            result.ErrorMessage);
+        Assert.DoesNotContain("rebind", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("10.0.0.8", result.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ManageWebhookEndpoint_ReturnsUnauthorized_WithoutOperatorCredential()
     {
         await EnsureDatabaseReadyAsync();
@@ -371,7 +522,8 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     }
 
     private static WebApplicationFactory<Program> CreateFactory(
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        bool allowLocalhostEndpoints = false)
     {
         return new WebApplicationFactory<Program>()
             .WithoutHostedServices()
@@ -380,6 +532,10 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
                 builder.UseSetting(
                     "Authentication:Operator:Credential",
                     OperatorCredential);
+                builder.UseSetting(
+                    "Webhooks:AllowLocalhostEndpoints",
+                    allowLocalhostEndpoints.ToString());
+                builder.ConfigureServices(UsePublicDnsAnswer);
                 if (configureServices is not null)
                 {
                     builder.ConfigureServices(configureServices);
@@ -436,6 +592,41 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     private sealed record InspectWebhookEndpointResponse(
         [property: JsonPropertyName("is_enabled")] bool IsEnabled,
         [property: JsonPropertyName("disabled_at")] DateTimeOffset? DisabledAt);
+
+    private sealed record RegisterWebhookEndpointErrorResponse(
+        [property: JsonPropertyName("error")] string Error);
+
+    private sealed class StubWebhookDnsResolver(params IPAddress[] addresses)
+        : IWebhookDnsResolver
+    {
+        public ValueTask<IPAddress[]> ResolveAsync(
+            string host,
+            CancellationToken cancellationToken)
+        {
+            return ValueTask.FromResult(addresses);
+        }
+    }
+
+    private sealed class SequenceWebhookDnsResolver(params IPAddress[][] answers)
+        : IWebhookDnsResolver
+    {
+        private int _index = -1;
+
+        public ValueTask<IPAddress[]> ResolveAsync(
+            string host,
+            CancellationToken cancellationToken)
+        {
+            var index = Math.Min(Interlocked.Increment(ref _index), answers.Length - 1);
+            return ValueTask.FromResult(answers[index]);
+        }
+    }
+
+    private static void UsePublicDnsAnswer(IServiceCollection services)
+    {
+        services.RemoveAll<IWebhookDnsResolver>();
+        services.AddSingleton<IWebhookDnsResolver>(new StubWebhookDnsResolver(
+            IPAddress.Parse("93.184.216.34")));
+    }
 
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
