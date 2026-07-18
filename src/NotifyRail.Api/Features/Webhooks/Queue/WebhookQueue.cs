@@ -88,7 +88,8 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
         ArgumentNullException.ThrowIfNull(result);
         var errorCode = Bound(result.ErrorCode, 100);
         var errorMessage = Bound(result.ErrorMessage, 500);
-        var outcome = result.Succeeded ? "succeeded" : "failed";
+        var outcome = ToDatabaseValue(result.Outcome);
+        var succeeded = result.Outcome == WebhookOutcome.Succeeded;
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         var recorded = await dbContext.Database.ExecuteSqlInterpolatedAsync(
@@ -123,7 +124,7 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
                 attempt_count = {claim.AttemptNumber},
                 claimed_at = NULL,
                 claimed_by = NULL,
-                succeeded_at = CASE WHEN {result.Succeeded} THEN {completedAt}::timestamptz ELSE NULL END,
+                succeeded_at = CASE WHEN {succeeded} THEN {completedAt}::timestamptz ELSE NULL END,
                 updated_at = {completedAt}
             WHERE id = {claim.EventId}
             """,
@@ -140,6 +141,16 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
 
         var normalized = value.Trim();
         return normalized.Length <= maximumLength ? normalized : normalized[..maximumLength];
+    }
+
+    private static string ToDatabaseValue(WebhookOutcome outcome)
+    {
+        return outcome switch
+        {
+            WebhookOutcome.Succeeded => "succeeded",
+            WebhookOutcome.Failed => "failed",
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown webhook outcome."),
+        };
     }
 
     private sealed class ClaimedWebhookRow

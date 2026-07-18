@@ -53,6 +53,7 @@ vhs scripts/demo-flow.tape
 | Retry/backoff | Retryable provider failures schedule `next_attempt_at`; permanent failures stop immediately. |
 | Attempt history | Every provider send attempt is persisted and exposed through the API. |
 | Provider callbacks | Mock callbacks safely finalize `sent` deliveries without regressing terminal states. |
+| Client webhooks | Provider acceptance atomically creates `delivery.sent`; a separate PostgreSQL-backed worker sends the exact payload with a versioned HMAC signature and records each attempt. |
 | OTP | OTP send is idempotent; verification is hashed, TTL-bound, one-time, and concurrency-safe. |
 | Reporting | Message summary and report endpoints expose aggregate delivery status counts. |
 
@@ -60,10 +61,10 @@ vhs scripts/demo-flow.tape
 
 ![NotifyRail system overview](infographic/notifyrail-overview/infographic-v2.png)
 
-The API and worker run in the same ASP.NET Core process for the MVP. PostgreSQL
-is both the durable store and the delivery queue. The mock provider can be
-configured per recipient, which makes accepted, retryable, and permanent failure
-paths easy to demonstrate.
+The API, Delivery Worker, and Webhook Worker run in the same ASP.NET Core
+process. PostgreSQL is both the durable store and the two independent queues.
+The mock provider can be configured per recipient, which makes accepted,
+retryable, and permanent failure paths easy to demonstrate.
 
 ## Tech Stack
 
@@ -212,14 +213,15 @@ remains available for development.
 Current validation:
 
 ```text
-Passed: 70
+Passed: 134
 Failed: 0
 Skipped: 0
 ```
 
-The tests cover message idempotency, delivery queue claiming, priority ordering,
-retry/backoff, stale claim recovery, provider callbacks, delivery reporting, OTP
-TTL, OTP one-time verification, and concurrency-sensitive behavior.
+The tests cover message idempotency, delivery and webhook queue claiming,
+priority ordering, retry/backoff, stale claim recovery, provider callbacks,
+signed real-HTTP webhook dispatch, delivery reporting, OTP TTL, OTP one-time
+verification, and concurrency-sensitive behavior.
 
 ## Development Notes
 
@@ -277,6 +279,7 @@ docker compose down -v
 | `src/NotifyRail.Api/Features/Messages` | Message intake, summaries, delivery reads, and reports |
 | `src/NotifyRail.Api/Features/Deliveries` | Delivery persistence, queue claiming, provider adapter, callbacks, and worker |
 | `src/NotifyRail.Api/Features/Otp` | OTP send, hashing, challenge persistence, and verification |
+| `src/NotifyRail.Api/Features/Webhooks` | Webhook Endpoint management, transactional outbox, signed dispatch, queue claiming, and worker processing |
 | `src/NotifyRail.Api/Infrastructure/Persistence` | EF Core DbContext and migrations |
 | `tests/NotifyRail.Api.Tests` | xUnit integration and unit tests |
 | `docs/reference` | Canonical implemented contracts |

@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using NotifyRail.Api.Features.Webhooks.Persistence;
+using NotifyRail.Api.Features.Webhooks.Outbox;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Features.Deliveries.Queue;
@@ -13,13 +13,17 @@ public sealed class DeliveryQueue
 
     private readonly NotifyRailDbContext _dbContext;
 
+    private readonly DeliveryWebhookOutbox _webhookOutbox;
+
     private readonly TimeSpan _baseRetryDelay;
 
     public DeliveryQueue(
         NotifyRailDbContext dbContext,
+        DeliveryWebhookOutbox webhookOutbox,
         IOptions<DeliveryQueueOptions> options)
     {
         _dbContext = dbContext;
+        _webhookOutbox = webhookOutbox;
         _baseRetryDelay = options.Value.BaseRetryDelay;
     }
 
@@ -290,52 +294,13 @@ public sealed class DeliveryQueue
 
         if (result.Outcome == ProviderOutcome.Accepted)
         {
-            await CreateDeliverySentEventAsync(
+            await _webhookOutbox.CreateDeliverySentAsync(
                 claim.DeliveryId,
                 attemptedAt,
                 cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
-    }
-
-    private async Task CreateDeliverySentEventAsync(
-        Guid deliveryId,
-        DateTimeOffset occurredAt,
-        CancellationToken cancellationToken)
-    {
-        var source = await (
-            from delivery in _dbContext.Deliveries
-            join message in _dbContext.Messages on delivery.MessageId equals message.Id
-            join endpoint in _dbContext.WebhookEndpoints
-                on message.ApiClientId equals endpoint.ApiClientId
-            where delivery.Id == deliveryId && endpoint.IsEnabled
-            select new
-            {
-                message.ApiClientId,
-                WebhookEndpointId = endpoint.Id,
-                MessageId = message.Id,
-                DeliveryId = delivery.Id,
-                delivery.Recipient,
-            }).SingleOrDefaultAsync(cancellationToken);
-
-        if (source is null)
-        {
-            return;
-        }
-
-        var sequence = await _dbContext.WebhookEvents
-            .Where(webhookEvent => webhookEvent.DeliveryId == deliveryId)
-            .CountAsync(cancellationToken) + 1;
-        _dbContext.WebhookEvents.Add(WebhookEvent.CreateDeliverySent(
-            source.ApiClientId,
-            source.WebhookEndpointId,
-            source.MessageId,
-            source.DeliveryId,
-            source.Recipient,
-            sequence,
-            occurredAt));
-        await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
     private static DeliveryJob CreateJob(ClaimedDeliveryRow row, string workerId)

@@ -25,6 +25,7 @@ using NotifyRail.Api.Features.Webhooks;
 using NotifyRail.Api.Features.Webhooks.DisableWebhookEndpoint;
 using NotifyRail.Api.Features.Webhooks.Dispatch;
 using NotifyRail.Api.Features.Webhooks.InspectWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.Outbox;
 using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
 using NotifyRail.Api.Features.Webhooks.Secrets;
@@ -87,6 +88,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddScoped<WebhookEndpointRegistrar>();
     builder.Services.AddScoped<WebhookEndpointReader>();
     builder.Services.AddScoped<WebhookEndpointDisabler>();
+    builder.Services.AddScoped<DeliveryWebhookOutbox>();
     builder.Services.AddScoped<WebhookQueue>();
     builder.Services.AddHttpClient<WebhookDispatcher>()
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler

@@ -38,7 +38,7 @@ public sealed class WebhookDispatcher(
         var statusCode = (int)response.StatusCode;
         var succeeded = statusCode is >= 200 and <= 299;
         return new WebhookResult(
-            succeeded,
+            succeeded ? WebhookOutcome.Succeeded : WebhookOutcome.Failed,
             statusCode,
             stopwatch.ElapsedMilliseconds,
             succeeded ? null : "http_error",

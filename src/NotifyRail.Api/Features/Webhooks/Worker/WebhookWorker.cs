@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using NotifyRail.Api.Features.Webhooks.Dispatch;
 using NotifyRail.Api.Features.Webhooks.Queue;
+using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Features.Webhooks.Worker;
 
@@ -8,6 +9,7 @@ public sealed class WebhookWorker
 {
     private readonly WebhookQueue _queue;
     private readonly WebhookDispatcher _dispatcher;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<WebhookWorker> _logger;
     private readonly string _workerId;
     private readonly int _batchSize;
@@ -16,6 +18,7 @@ public sealed class WebhookWorker
         WebhookQueue queue,
         WebhookDispatcher dispatcher,
         IOptions<WebhookWorkerOptions> options,
+        TimeProvider timeProvider,
         ILogger<WebhookWorker> logger)
     {
         var workerId = options.Value.WorkerId?.Trim();
@@ -33,6 +36,7 @@ public sealed class WebhookWorker
 
         _queue = queue;
         _dispatcher = dispatcher;
+        _timeProvider = timeProvider;
         _logger = logger;
         _workerId = workerId;
         _batchSize = batchSize;
@@ -51,7 +55,11 @@ public sealed class WebhookWorker
         foreach (var job in jobs)
         {
             var result = await SendAsync(job.Request, now, cancellationToken);
-            await _queue.RecordResultAsync(job.Claim, result, now, cancellationToken);
+            await _queue.RecordResultAsync(
+                job.Claim,
+                result,
+                PostgresTimestamp.Normalize(_timeProvider.GetUtcNow()),
+                cancellationToken);
             processed++;
         }
 
@@ -73,7 +81,7 @@ public sealed class WebhookWorker
         {
             _logger.LogWarning(exception, "Webhook dispatch failed for event {WebhookEventId}", request.EventId);
             return new WebhookResult(
-                Succeeded: false,
+                Outcome: WebhookOutcome.Failed,
                 HttpStatusCode: null,
                 LatencyMilliseconds: 0,
                 ErrorCode: "network_error",

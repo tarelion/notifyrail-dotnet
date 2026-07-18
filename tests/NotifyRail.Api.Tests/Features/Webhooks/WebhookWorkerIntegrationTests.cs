@@ -43,7 +43,7 @@ public sealed class WebhookWorkerIntegrationTests
         var (apiClientId, secret) = await CreateApiClientWithEndpointAsync(receiver.Url);
         await CreateMessageAsync(apiClientId);
         await RecordAcceptedDeliveryAsync();
-        var dispatchAt = new DateTimeOffset(2026, 7, 18, 12, 30, 0, TimeSpan.Zero);
+        var dispatchAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
 
         await using var scope = _factory.Services.CreateAsyncScope();
         var worker = scope.ServiceProvider.GetRequiredService<WebhookWorker>();
@@ -60,7 +60,10 @@ public sealed class WebhookWorkerIntegrationTests
             received.Signature);
         Assert.Equal("succeeded", state.EventStatus);
         Assert.Equal(1, state.EventAttemptCount);
-        Assert.Equal(dispatchAt, state.EventSucceededAt);
+        Assert.Equal(dispatchAt, state.AttemptedAt);
+        Assert.NotNull(state.EventSucceededAt);
+        Assert.Equal(state.CompletedAt, state.EventSucceededAt);
+        Assert.True(state.CompletedAt > state.AttemptedAt);
         Assert.Equal(1, state.AttemptNumber);
         Assert.Equal("succeeded", state.AttemptOutcome);
         Assert.Equal(204, state.HttpStatusCode);
@@ -79,7 +82,7 @@ public sealed class WebhookWorkerIntegrationTests
         var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
         await CreateMessageAsync(apiClientId);
         await RecordAcceptedDeliveryAsync();
-        var dispatchAt = new DateTimeOffset(2026, 7, 18, 12, 45, 0, TimeSpan.Zero);
+        var dispatchAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
 
         await using var scope = _factory.Services.CreateAsyncScope();
         var worker = scope.ServiceProvider.GetRequiredService<WebhookWorker>();
@@ -180,7 +183,9 @@ public sealed class WebhookWorkerIntegrationTests
                 webhook_attempts.outcome AS "AttemptOutcome",
                 webhook_attempts.http_status_code AS "HttpStatusCode",
                 webhook_attempts.error_code AS "ErrorCode",
-                webhook_attempts.error_message AS "ErrorMessage"
+                webhook_attempts.error_message AS "ErrorMessage",
+                webhook_attempts.attempted_at AS "AttemptedAt",
+                webhook_attempts.completed_at AS "CompletedAt"
             FROM webhook_events
             JOIN deliveries ON deliveries.id = webhook_events.delivery_id
             JOIN webhook_attempts ON webhook_attempts.webhook_event_id = webhook_events.id
@@ -207,6 +212,13 @@ public sealed class WebhookWorkerIntegrationTests
         public int? HttpStatusCode { get; init; }
         public string? ErrorCode { get; init; }
         public string? ErrorMessage { get; init; }
+        public DateTimeOffset AttemptedAt { get; init; }
+        public DateTimeOffset CompletedAt { get; init; }
+    }
+
+    private static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value)
+    {
+        return value.AddTicks(-(value.Ticks % 10));
     }
 
     private sealed class TestWebhookReceiver : IAsyncDisposable
