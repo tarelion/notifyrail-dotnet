@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NotifyRail.Api.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(NotifyRailDbContext))]
-    partial class NotifyRailDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260718092448_AddWebhookEventOutbox")]
+    partial class AddWebhookEventOutbox
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -441,75 +444,6 @@ namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
                         });
                 });
 
-            modelBuilder.Entity("NotifyRail.Api.Features.Webhooks.Persistence.WebhookAttempt", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id")
-                        .HasDefaultValueSql("gen_random_uuid()");
-
-                    b.Property<int>("AttemptNumber")
-                        .HasColumnType("integer")
-                        .HasColumnName("attempt_number");
-
-                    b.Property<DateTimeOffset>("AttemptedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("attempted_at");
-
-                    b.Property<DateTimeOffset>("CompletedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("completed_at");
-
-                    b.Property<string>("ErrorCode")
-                        .HasColumnType("text")
-                        .HasColumnName("error_code");
-
-                    b.Property<string>("ErrorMessage")
-                        .HasColumnType("text")
-                        .HasColumnName("error_message");
-
-                    b.Property<int?>("HttpStatusCode")
-                        .HasColumnType("integer")
-                        .HasColumnName("http_status_code");
-
-                    b.Property<long>("LatencyMilliseconds")
-                        .HasColumnType("bigint")
-                        .HasColumnName("latency_milliseconds");
-
-                    b.Property<string>("Outcome")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("outcome");
-
-                    b.Property<Guid>("WebhookEventId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("webhook_event_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("WebhookEventId", "AttemptNumber")
-                        .IsUnique()
-                        .HasDatabaseName("webhook_attempts_event_id_attempt_number_key");
-
-                    b.ToTable("webhook_attempts", null, t =>
-                        {
-                            t.HasCheckConstraint("webhook_attempts_attempt_number_check", "attempt_number > 0");
-
-                            t.HasCheckConstraint("webhook_attempts_error_code_check", "error_code IS NULL OR (btrim(error_code) <> '' AND char_length(error_code) <= 100)");
-
-                            t.HasCheckConstraint("webhook_attempts_error_message_check", "error_message IS NULL OR (btrim(error_message) <> '' AND char_length(error_message) <= 500)");
-
-                            t.HasCheckConstraint("webhook_attempts_http_status_code_check", "http_status_code IS NULL OR http_status_code BETWEEN 100 AND 599");
-
-                            t.HasCheckConstraint("webhook_attempts_latency_check", "latency_milliseconds >= 0");
-
-                            t.HasCheckConstraint("webhook_attempts_outcome_check", "outcome IN ('succeeded', 'failed')");
-
-                            t.HasCheckConstraint("webhook_attempts_time_check", "completed_at >= attempted_at");
-                        });
-                });
-
             modelBuilder.Entity("NotifyRail.Api.Features.Webhooks.Persistence.WebhookEndpoint", b =>
                 {
                     b.Property<Guid>("Id")
@@ -763,15 +697,6 @@ namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
                         .HasConstraintName("otp_challenges_message_id_fkey");
 
                     b.Navigation("Message");
-                });
-
-            modelBuilder.Entity("NotifyRail.Api.Features.Webhooks.Persistence.WebhookAttempt", b =>
-                {
-                    b.HasOne("NotifyRail.Api.Features.Webhooks.Persistence.WebhookEvent", null)
-                        .WithMany()
-                        .HasForeignKey("WebhookEventId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("NotifyRail.Api.Features.Webhooks.Persistence.WebhookEndpoint", b =>

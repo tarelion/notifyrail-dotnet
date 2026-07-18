@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using NotifyRail.Api.Features.Webhooks.Outbox;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Features.Deliveries.Queue;
@@ -12,13 +13,17 @@ public sealed class DeliveryQueue
 
     private readonly NotifyRailDbContext _dbContext;
 
+    private readonly DeliveryWebhookOutbox _webhookOutbox;
+
     private readonly TimeSpan _baseRetryDelay;
 
     public DeliveryQueue(
         NotifyRailDbContext dbContext,
+        DeliveryWebhookOutbox webhookOutbox,
         IOptions<DeliveryQueueOptions> options)
     {
         _dbContext = dbContext;
+        _webhookOutbox = webhookOutbox;
         _baseRetryDelay = options.Value.BaseRetryDelay;
     }
 
@@ -286,6 +291,14 @@ public sealed class DeliveryQueue
             WHERE id = {claim.DeliveryId}
             """,
             cancellationToken);
+
+        if (result.Outcome == ProviderOutcome.Accepted)
+        {
+            await _webhookOutbox.CreateDeliverySentAsync(
+                claim.DeliveryId,
+                attemptedAt,
+                cancellationToken);
+        }
 
         await transaction.CommitAsync(cancellationToken);
     }

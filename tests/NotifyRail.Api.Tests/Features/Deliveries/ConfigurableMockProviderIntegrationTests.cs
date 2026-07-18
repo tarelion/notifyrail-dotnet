@@ -138,6 +138,6 @@ public sealed class ConfigurableMockProviderIntegrationTests
 
         await dbContext.Database.MigrateAsync();
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE otp_challenges, delivery_attempts, deliveries, messages;");
+            "TRUNCATE webhook_attempts, webhook_events, otp_challenges, delivery_attempts, deliveries, messages;");
     }
 }

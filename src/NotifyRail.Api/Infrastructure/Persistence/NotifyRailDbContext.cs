@@ -24,6 +24,10 @@ public sealed class NotifyRailDbContext(DbContextOptions<NotifyRailDbContext> op
 
     public DbSet<WebhookEndpoint> WebhookEndpoints => Set<WebhookEndpoint>();
 
+    public DbSet<WebhookAttempt> WebhookAttempts => Set<WebhookAttempt>();
+
+    public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
+
     public DbSet<WebhookSecret> WebhookSecrets => Set<WebhookSecret>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
