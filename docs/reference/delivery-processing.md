@@ -52,6 +52,7 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `WebhookWorker:JitterRatio` | configuration / `WebhookWorkerOptions.JitterRatio` | `0.2` | Random proportional offset in the inclusive range `0` to `1`; `0.2` gives a multiplier from `0.8` through `1.2`. |
 | `WebhookWorker:RequestTimeout` | configuration / `WebhookWorkerOptions.RequestTimeout` | `100s` | Positive timeout applied to each outbound HTTP request. |
 | `WebhookWorker:ClaimTimeout` | configuration / `WebhookWorkerOptions.ClaimTimeout` | `5m` | Positive lease duration after which an in-progress event is eligible for recovery; it must be greater than `RequestTimeout`. |
+| `Webhooks:AllowLocalhostEndpoints` | configuration / `WebhookOptions.AllowLocalhostEndpoints` | `false` | Explicit development/test exception allowing HTTP or HTTPS `localhost` and loopback literal endpoints. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 | `MockProviderCallback:Secret` | configuration / `MockProviderCallbackOptions.Secret` | none | Required provider-specific HMAC secret for authenticating mock Provider Callbacks. It is separate from API Keys, Operator Credentials, and Webhook Secrets. |
 | `MockProviderCallback:SignatureTolerance` | configuration / `MockProviderCallbackOptions.SignatureTolerance` | `00:05:00` | Maximum accepted clock difference in either direction for mock Provider Callback signatures. |
@@ -314,9 +315,17 @@ claim transaction commits before any HTTP request is made. Each request is a
 `POST` whose body is the exact JSON text persisted on the Webhook Event.
 The claim lease must exceed the outbound request timeout so a live request
 cannot become eligible for concurrent recovery.
-Redirect following is disabled. The worker claims one event immediately before
-each send, up to the configured batch limit, so later batch items do not consume
-their claim lease while an earlier endpoint is responding.
+Immediately before opening a connection, NotifyRail resolves the endpoint again
+and requires every IPv4 or IPv6 answer to satisfy the same public-address policy
+used during configuration. Mixed safe and unsafe answers fail closed. The socket
+is opened directly to one of the validated answers, which prevents a second
+implicit DNS lookup from introducing a rebinding window. Environment HTTP
+proxies and automatic redirects are disabled. The development/test localhost
+exception applies at connection time only when explicitly configured.
+
+The worker claims one event immediately before each send, up to the configured
+batch limit, so later batch items do not consume their claim lease while an
+earlier endpoint is responding.
 
 The outbound headers are:
 
@@ -338,6 +347,7 @@ Dispatch outcomes are normalized as follows:
 | HTTP 2xx | `succeeded` | `succeeded` |
 | Network error, timeout, HTTP 408, HTTP 429, or HTTP 5xx | `retryable_failure` | `retry_scheduled` |
 | Redirect or any other HTTP 3xx/4xx | `permanent_failure` | `failed` |
+| Endpoint resolves to any prohibited address | `permanent_failure` | `failed` |
 
 Attempt `N` uses `BaseRetryDelay * 2^(N-1)` and a jitter multiplier uniformly
 bounded by `1 - JitterRatio` and `1 + JitterRatio`. The result is clamped to the
@@ -350,7 +360,9 @@ Every request records one Webhook Attempt. Attempts retain status code, timing,
 latency, normalized outcome, and error diagnostics bounded to 100 characters
 for codes and 500 characters for messages. Response bodies are not persisted.
 Network and timeout diagnostics are normalized rather than persisting raw
-exception or endpoint details.
+exception or endpoint details. Prohibited dispatch destinations record the
+bounded code `unsafe_endpoint` and a fixed message without URL, hostname, query,
+or resolved-address details.
 Webhook dispatch state never changes Delivery status.
 
 A timeout or other ambiguous response records a retryable Webhook Attempt. The
