@@ -1,4 +1,5 @@
 using System.Net;
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
@@ -9,10 +10,14 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Deliveries.Queue;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.Dispatch;
+using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Infrastructure.Persistence;
 
@@ -53,14 +58,14 @@ public sealed class WebhookWorkerIntegrationTests
         var state = await LoadWebhookStateAsync();
         Assert.Equal(1, processed);
         Assert.Equal(state.EventId.ToString(), received.EventId);
-        Assert.Equal(dispatchAt.ToUnixTimeSeconds().ToString(), received.Timestamp);
+        Assert.Equal(state.AttemptedAt.ToUnixTimeSeconds().ToString(), received.Timestamp);
         Assert.Equal(state.Payload, received.Body);
         Assert.Equal(
             Sign(secret, received.Timestamp, received.Body),
             received.Signature);
         Assert.Equal("succeeded", state.EventStatus);
         Assert.Equal(1, state.EventAttemptCount);
-        Assert.Equal(dispatchAt, state.AttemptedAt);
+        Assert.True(state.AttemptedAt >= dispatchAt);
         Assert.NotNull(state.EventSucceededAt);
         Assert.Equal(state.CompletedAt, state.EventSucceededAt);
         Assert.True(state.CompletedAt > state.AttemptedAt);
@@ -100,6 +105,38 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.DoesNotContain(remoteBody, state.ErrorMessage, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ProcessBatchAsync_ClaimsAndSignsEachBatchItemAtDispatchTime()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(HttpStatusCode.NoContent);
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId, ["+905551111111", "+905552222222"]);
+        await RecordAcceptedDeliveriesAsync(count: 2);
+        var startedAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var timeProvider = new AdvancingTimeProvider(startedAt, TimeSpan.FromMinutes(2));
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var worker = new WebhookWorker(
+            scope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            scope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions
+            {
+                WorkerId = "batch-webhook-worker",
+                BatchSize = 2,
+            }),
+            timeProvider,
+            scope.ServiceProvider.GetRequiredService<ILogger<WebhookWorker>>());
+
+        var processed = await worker.ProcessBatchAsync(startedAt, CancellationToken.None);
+
+        var received = await receiver.WaitForCountAsync(2);
+        Assert.Equal(2, processed);
+        Assert.Equal(2, received.Count);
+        Assert.NotEqual(received[0].Timestamp, received[1].Timestamp);
+        Assert.True(long.Parse(received[1].Timestamp) > long.Parse(received[0].Timestamp));
+    }
+
     private async Task<(Guid ApiClientId, string Secret)> CreateApiClientWithEndpointAsync(
         string endpointUrl)
     {
@@ -116,7 +153,9 @@ public sealed class WebhookWorkerIntegrationTests
         return (created.ApiClientId, registered.WebhookSecret);
     }
 
-    private async Task CreateMessageAsync(Guid apiClientId)
+    private async Task CreateMessageAsync(
+        Guid apiClientId,
+        IReadOnlyList<string>? recipients = null)
     {
         await using var scope = _factory.Services.CreateAsyncScope();
         var intake = scope.ServiceProvider.GetRequiredService<MessageIntake>();
@@ -127,7 +166,7 @@ public sealed class WebhookWorkerIntegrationTests
                 Channel: "sms",
                 SenderTitle: "NotifyRail",
                 Body: "Your order is ready.",
-                Recipients: ["+905551111111"],
+                Recipients: recipients ?? ["+905551111111"],
                 IdempotencyKey: $"webhook-worker-{Guid.NewGuid()}",
                 ScheduledAt: null,
                 ReportLabel: null,
@@ -138,21 +177,29 @@ public sealed class WebhookWorkerIntegrationTests
 
     private async Task RecordAcceptedDeliveryAsync()
     {
+        await RecordAcceptedDeliveriesAsync(count: 1);
+    }
+
+    private async Task RecordAcceptedDeliveriesAsync(int count)
+    {
         await using var scope = _factory.Services.CreateAsyncScope();
         var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
-        var job = Assert.Single(await queue.ClaimDueAsync(
-            "delivery-worker",
-            limit: 1,
-            DateTimeOffset.UtcNow,
-            CancellationToken.None));
-        await queue.RecordProviderResultAsync(
-            job.Claim,
-            new ProviderResult(
-                ProviderOutcome.Accepted,
-                Provider: "mock",
-                ProviderMessageId: "provider-message-1"),
-            DateTimeOffset.UtcNow,
-            CancellationToken.None);
+        for (var index = 0; index < count; index++)
+        {
+            var job = Assert.Single(await queue.ClaimDueAsync(
+                "delivery-worker",
+                limit: 1,
+                DateTimeOffset.UtcNow,
+                CancellationToken.None));
+            await queue.RecordProviderResultAsync(
+                job.Claim,
+                new ProviderResult(
+                    ProviderOutcome.Accepted,
+                    Provider: "mock",
+                    ProviderMessageId: $"provider-message-{index + 1}"),
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
+        }
     }
 
     private async Task ResetDatabaseAsync()
@@ -224,19 +271,33 @@ public sealed class WebhookWorkerIntegrationTests
     private sealed class TestWebhookReceiver : IAsyncDisposable
     {
         private readonly WebApplication _application;
+        private readonly ConcurrentQueue<ReceivedWebhook> _receivedWebhooks;
 
         private TestWebhookReceiver(
             WebApplication application,
             string url,
-            Task<ReceivedWebhook> received)
+            Task<ReceivedWebhook> received,
+            ConcurrentQueue<ReceivedWebhook> receivedWebhooks)
         {
             _application = application;
             Url = url;
             Received = received;
+            _receivedWebhooks = receivedWebhooks;
         }
 
         public string Url { get; }
         public Task<ReceivedWebhook> Received { get; }
+
+        public async Task<IReadOnlyList<ReceivedWebhook>> WaitForCountAsync(int count)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            while (_receivedWebhooks.Count < count)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
+            }
+
+            return _receivedWebhooks.ToArray();
+        }
 
         public static async Task<TestWebhookReceiver> StartAsync(
             HttpStatusCode statusCode,
@@ -244,6 +305,7 @@ public sealed class WebhookWorkerIntegrationTests
         {
             var received = new TaskCompletionSource<ReceivedWebhook>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
+            var receivedWebhooks = new ConcurrentQueue<ReceivedWebhook>();
             var builder = WebApplication.CreateSlimBuilder();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
             var application = builder.Build();
@@ -251,11 +313,13 @@ public sealed class WebhookWorkerIntegrationTests
             {
                 using var reader = new StreamReader(context.Request.Body, Encoding.UTF8);
                 var body = await reader.ReadToEndAsync(context.RequestAborted);
-                received.TrySetResult(new ReceivedWebhook(
+                var webhook = new ReceivedWebhook(
                     context.Request.Headers["X-NotifyRail-Event-Id"].ToString(),
                     context.Request.Headers["X-NotifyRail-Timestamp"].ToString(),
                     context.Request.Headers["X-NotifyRail-Signature"].ToString(),
-                    body));
+                    body);
+                receivedWebhooks.Enqueue(webhook);
+                received.TrySetResult(webhook);
                 context.Response.StatusCode = (int)statusCode;
                 if (responseBody is not null)
                 {
@@ -265,7 +329,11 @@ public sealed class WebhookWorkerIntegrationTests
             await application.StartAsync();
             var address = application.Services.GetRequiredService<IServer>()
                 .Features.Get<IServerAddressesFeature>()!.Addresses.Single();
-            return new TestWebhookReceiver(application, $"{address}/webhooks", received.Task);
+            return new TestWebhookReceiver(
+                application,
+                $"{address}/webhooks",
+                received.Task,
+                receivedWebhooks);
         }
 
         public async ValueTask DisposeAsync()
@@ -280,4 +348,16 @@ public sealed class WebhookWorkerIntegrationTests
         string Timestamp,
         string Signature,
         string Body);
+
+    private sealed class AdvancingTimeProvider(
+        DateTimeOffset start,
+        TimeSpan step) : TimeProvider
+    {
+        private long _callCount = -1;
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            return start.AddTicks(step.Ticks * Interlocked.Increment(ref _callCount));
+        }
+    }
 }

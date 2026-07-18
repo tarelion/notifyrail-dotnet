@@ -46,21 +46,32 @@ public sealed class WebhookWorker
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        var jobs = await _queue.ClaimDueAsync(
-            _workerId,
-            _batchSize,
-            now,
-            cancellationToken);
         var processed = 0;
-        foreach (var job in jobs)
+        var claimTime = now;
+        while (processed < _batchSize)
         {
-            var result = await SendAsync(job.Request, now, cancellationToken);
+            var jobs = await _queue.ClaimDueAsync(
+                _workerId,
+                limit: 1,
+                claimTime,
+                cancellationToken);
+            if (jobs.Count == 0)
+            {
+                break;
+            }
+
+            var job = jobs[0];
+            var attemptedAt = PostgresTimestamp.Normalize(_timeProvider.GetUtcNow());
+            var result = await SendAsync(job.Request, attemptedAt, cancellationToken);
+            var completedAt = PostgresTimestamp.Normalize(_timeProvider.GetUtcNow());
             await _queue.RecordResultAsync(
                 job.Claim,
                 result,
-                PostgresTimestamp.Normalize(_timeProvider.GetUtcNow()),
+                attemptedAt,
+                completedAt,
                 cancellationToken);
             processed++;
+            claimTime = completedAt;
         }
 
         return processed;

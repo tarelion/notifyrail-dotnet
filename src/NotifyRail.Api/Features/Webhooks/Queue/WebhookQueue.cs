@@ -73,7 +73,7 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
 
         await transaction.CommitAsync(cancellationToken);
         return rows.Select(row => new WebhookJob(
-            new WebhookClaim(row.EventId, workerId, row.AttemptCount + 1, claimTime),
+            new WebhookClaim(row.EventId, workerId, row.AttemptCount + 1),
             new WebhookRequest(row.EventId, row.EndpointUrl, row.Body, row.ProtectedSecret)))
             .ToArray();
     }
@@ -81,6 +81,7 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
     public async Task RecordResultAsync(
         WebhookClaim claim,
         WebhookResult result,
+        DateTimeOffset attemptedAt,
         DateTimeOffset completedAt,
         CancellationToken cancellationToken)
     {
@@ -99,7 +100,7 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
                 error_code, error_message, attempted_at, completed_at, latency_milliseconds)
             SELECT
                 candidate.id, {claim.AttemptNumber}, {outcome}, {result.HttpStatusCode},
-                {errorCode}, {errorMessage}, {claim.ClaimedAt}, {completedAt}, {result.LatencyMilliseconds}
+                {errorCode}, {errorMessage}, {attemptedAt}, {completedAt}, {result.LatencyMilliseconds}
             FROM (
                 SELECT id
                 FROM webhook_events

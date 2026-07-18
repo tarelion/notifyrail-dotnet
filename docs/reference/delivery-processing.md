@@ -44,7 +44,7 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `DeliveryWorker:PollInterval` | configuration / `DeliveryWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
 | `DeliveryQueue:BaseRetryDelay` | configuration / `DeliveryQueueOptions.BaseRetryDelay` | `1m` | Positive base retry delay. Attempt `N` waits `N * BaseRetryDelay`. |
 | `WebhookWorker:WorkerId` | configuration / `WebhookWorkerOptions.WorkerId` | `notifyrail-webhook-<guid>` | Trimmed non-empty identity independent from the Delivery Worker. |
-| `WebhookWorker:BatchSize` | configuration / `WebhookWorkerOptions.BatchSize` | `1` | `0` uses the default; negative values are invalid. |
+| `WebhookWorker:BatchSize` | configuration / `WebhookWorkerOptions.BatchSize` | `1` | Maximum events processed per poll. Events are claimed individually immediately before dispatch; `0` uses the default and negative values are invalid. |
 | `WebhookWorker:PollInterval` | configuration / `WebhookWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 | `MockProviderCallback:Secret` | configuration / `MockProviderCallbackOptions.Secret` | none | Required provider-specific HMAC secret for authenticating mock Provider Callbacks. It is separate from API Keys, Operator Credentials, and Webhook Secrets. |
@@ -298,6 +298,9 @@ from `DeliveryWorkerBackgroundService`.
 pending events through `FOR UPDATE SKIP LOCKED`. The claim transaction commits
 before any HTTP request is made. Each request is a `POST` whose body is the
 exact JSON text persisted on the Webhook Event. Redirect following is disabled.
+The worker claims one event immediately before each send, up to the configured
+batch limit, so later batch items do not consume their claim lease while an
+earlier endpoint is responding.
 
 The outbound headers are:
 
@@ -309,7 +312,8 @@ The outbound headers are:
 
 The v1 signature input is the UTF-8 encoding of
 `<timestamp>.<exact_body>`. The HMAC key is the owning API Client's unprotected
-Webhook Secret. Any HTTP 2xx response marks the event `succeeded`; another
+Webhook Secret. The timestamp is captured for each request immediately before
+dispatch. Any HTTP 2xx response marks the event `succeeded`; another
 status or a network failure marks this initial tracer-bullet event `failed`.
 Reliable retry and dead-event behavior is intentionally delivered by later v2
 slices.
