@@ -87,6 +87,24 @@ capabilities.
   once a delivery is `delivered`, `failed`, or `expired`, later callbacks are
   no-ops and return the persisted terminal state.
 
+## Client Webhook Invariants
+
+- Client-visible `sent`, `delivered`, `failed`, and `expired` transitions create
+  `delivery.sent`, `delivery.delivered`, `delivery.failed`, and
+  `delivery.expired` Webhook Events when the owning API Client has an active
+  Webhook Endpoint.
+- Internal `queued`, `processing`, and `retry_scheduled` transitions do not
+  create Webhook Events.
+- Webhook Event sequence values are positive and monotonically increasing
+  within each Delivery.
+- A later event for one Delivery is not dispatched while an earlier event is
+  pending or processing. Events for different Deliveries remain independently
+  claimable.
+- Delivery truth and Webhook Event dispatch state are independent after the
+  transition transaction commits.
+- Duplicate or conflicting Provider Callbacks preserve the first terminal
+  Delivery state and do not create another logical terminal Webhook Event.
+
 ## OTP-Specific Rules
 
 - OTP deliveries use the same delivery lifecycle.

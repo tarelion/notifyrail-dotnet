@@ -5,7 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Deliveries.Queue;
+using NotifyRail.Api.Features.Deliveries.ProviderCallbacks.Mock;
 using NotifyRail.Api.Features.Messages.CreateMessage;
+using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
 using NotifyRail.Api.Infrastructure.Persistence;
 
@@ -120,6 +122,181 @@ public sealed class WebhookEventOutboxIntegrationTests
         Assert.Equal(1, await CountWebhookEventsAsync());
     }
 
+    [Theory]
+    [InlineData("campaign")]
+    [InlineData("transactional")]
+    [InlineData("otp")]
+    public async Task RecordProviderResultAsync_CreatesDeliveryFailedEventForEveryMessageType(
+        string messageType)
+    {
+        await ResetDatabaseAsync();
+        var apiClientId = await CreateApiClientWithEndpointAsync();
+        await CreateMessageAsync(apiClientId, type: messageType);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
+        var job = Assert.Single(await queue.ClaimDueAsync(
+            "delivery-worker",
+            limit: 1,
+            DateTimeOffset.UtcNow,
+            CancellationToken.None));
+        await queue.RecordProviderResultAsync(
+            job.Claim,
+            new ProviderResult(
+                ProviderOutcome.PermanentFailure,
+                Provider: "mock",
+                ErrorCode: "invalid_recipient"),
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        var webhookEvent = await LoadWebhookEventAsync();
+        Assert.Equal("delivery.failed", webhookEvent.Type);
+        Assert.Equal(1, webhookEvent.Sequence);
+        using var payload = JsonDocument.Parse(webhookEvent.Payload);
+        Assert.Equal(
+            "failed",
+            payload.RootElement.GetProperty("data").GetProperty("status").GetString());
+    }
+
+    [Theory]
+    [InlineData("queued", 1)]
+    [InlineData("retry_scheduled", 1)]
+    [InlineData("sent", 2)]
+    public async Task ClaimDueAsync_CreatesDeliveryExpiredEventFromEveryExpirableState(
+        string startingStatus,
+        int expectedSequence)
+    {
+        await ResetDatabaseAsync();
+        var apiClientId = await CreateApiClientWithEndpointAsync();
+        await CreateMessageAsync(apiClientId);
+        var transitionAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
+        if (startingStatus is "retry_scheduled" or "sent")
+        {
+            var job = Assert.Single(await queue.ClaimDueAsync(
+                "delivery-worker",
+                limit: 1,
+                transitionAt,
+                CancellationToken.None));
+            var result = startingStatus == "sent"
+                ? new ProviderResult(
+                    ProviderOutcome.Accepted,
+                    Provider: "mock",
+                    ProviderMessageId: "provider-message-expiry")
+                : new ProviderResult(ProviderOutcome.RetryableFailure, Provider: "mock");
+            await queue.RecordProviderResultAsync(
+                job.Claim,
+                result,
+                transitionAt,
+                CancellationToken.None);
+        }
+
+        var expiredAt = transitionAt.AddMinutes(1);
+        await dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE deliveries SET expires_at = {expiredAt}");
+
+        Assert.Empty(await queue.ClaimDueAsync(
+            "delivery-worker",
+            limit: 1,
+            expiredAt,
+            CancellationToken.None));
+
+        var webhookEvent = await LoadLastWebhookEventAsync();
+        Assert.Equal("delivery.expired", webhookEvent.Type);
+        Assert.Equal(expectedSequence, webhookEvent.Sequence);
+        using var payload = JsonDocument.Parse(webhookEvent.Payload);
+        Assert.Equal(
+            "expired",
+            payload.RootElement.GetProperty("data").GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task RecordProviderResultAsync_EmitsOnlyFinalFailureAfterRetriesAreExhausted()
+    {
+        await ResetDatabaseAsync();
+        var apiClientId = await CreateApiClientWithEndpointAsync();
+        await CreateMessageAsync(apiClientId);
+        var now = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = scope.ServiceProvider.GetRequiredService<DeliveryQueue>();
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var job = Assert.Single(await queue.ClaimDueAsync(
+                "delivery-worker",
+                limit: 1,
+                now,
+                CancellationToken.None));
+            await queue.RecordProviderResultAsync(
+                job.Claim,
+                new ProviderResult(ProviderOutcome.RetryableFailure, Provider: "mock"),
+                now,
+                CancellationToken.None);
+            now = now.AddMinutes(attempt);
+        }
+
+        var webhookEvent = await LoadWebhookEventAsync();
+        Assert.Equal("delivery.failed", webhookEvent.Type);
+        Assert.Equal(1, webhookEvent.Sequence);
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_BlocksLaterEventPerDeliveryWhileOtherDeliveriesProgress()
+    {
+        await ResetDatabaseAsync();
+        var apiClientId = await CreateApiClientWithEndpointAsync();
+        await CreateMessageAsync(
+            apiClientId,
+            ["+905551111111", "+905552222222"]);
+
+        await RecordAcceptedProviderResultAsync("provider-message-1");
+        await RecordAcceptedProviderResultAsync("provider-message-2");
+        await using var callbackScope = _factory.Services.CreateAsyncScope();
+        var callbackHandler = callbackScope.ServiceProvider
+            .GetRequiredService<MockProviderCallbackHandler>();
+        Assert.NotNull(await callbackHandler.ApplyAsync(
+            "provider-message-1",
+            "delivered",
+            CancellationToken.None));
+        Assert.NotNull(await callbackHandler.ApplyAsync(
+            "provider-message-2",
+            "failed",
+            CancellationToken.None));
+
+        var webhookQueue = callbackScope.ServiceProvider.GetRequiredService<WebhookQueue>();
+        var firstClaims = await webhookQueue.ClaimDueAsync(
+            "webhook-worker-a",
+            limit: 10,
+            DateTimeOffset.UtcNow,
+            CancellationToken.None);
+
+        Assert.Equal(2, firstClaims.Count);
+        Assert.All(firstClaims, job => Assert.Equal("delivery.sent", EventType(job.Request.Body)));
+
+        var completedAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        await webhookQueue.RecordResultAsync(
+            firstClaims[0].Claim,
+            new WebhookResult(
+                WebhookOutcome.Succeeded,
+                HttpStatusCode: 204,
+                LatencyMilliseconds: 1),
+            completedAt,
+            completedAt,
+            CancellationToken.None);
+
+        var nextClaim = Assert.Single(await webhookQueue.ClaimDueAsync(
+            "webhook-worker-b",
+            limit: 10,
+            completedAt,
+            CancellationToken.None));
+        Assert.Contains(
+            EventType(nextClaim.Request.Body),
+            new[] { "delivery.delivered", "delivery.failed" });
+    }
+
     private async Task<Guid> CreateApiClientAsync()
     {
         await using var scope = _factory.Services.CreateAsyncScope();
@@ -143,14 +320,15 @@ public sealed class WebhookEventOutboxIntegrationTests
 
     private async Task<Guid> CreateMessageAsync(
         Guid apiClientId,
-        IReadOnlyList<string>? recipients = null)
+        IReadOnlyList<string>? recipients = null,
+        string type = "transactional")
     {
         await using var scope = _factory.Services.CreateAsyncScope();
         var intake = scope.ServiceProvider.GetRequiredService<MessageIntake>();
         var outcome = await intake.CreateAsync(
             apiClientId,
             new CreateMessageCommand(
-                Type: "transactional",
+                Type: type,
                 Channel: "sms",
                 SenderTitle: "NotifyRail",
                 Body: "Your order is ready.",
@@ -213,6 +391,28 @@ public sealed class WebhookEventOutboxIntegrationTests
             """).SingleAsync(CancellationToken.None);
     }
 
+    private async Task<WebhookEventState> LoadLastWebhookEventAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        return await dbContext.Database.SqlQueryRaw<WebhookEventState>(
+            """
+            SELECT
+                id AS "Id",
+                type AS "Type",
+                version AS "Version",
+                occurred_at AS "OccurredAt",
+                message_id AS "MessageId",
+                delivery_id AS "DeliveryId",
+                sequence AS "Sequence",
+                status AS "Status",
+                payload AS "Payload"
+            FROM webhook_events
+            ORDER BY sequence DESC
+            LIMIT 1
+            """).SingleAsync(CancellationToken.None);
+    }
+
     private async Task<int> CountWebhookEventsAsync()
     {
         await using var scope = _factory.Services.CreateAsyncScope();
@@ -234,6 +434,12 @@ public sealed class WebhookEventOutboxIntegrationTests
     private static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value)
     {
         return value.AddTicks(-(value.Ticks % 10));
+    }
+
+    private static string EventType(string payload)
+    {
+        using var document = JsonDocument.Parse(payload);
+        return document.RootElement.GetProperty("type").GetString()!;
     }
 
     private sealed class WebhookEventState

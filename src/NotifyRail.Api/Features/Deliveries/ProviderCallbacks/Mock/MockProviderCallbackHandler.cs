@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
+using NotifyRail.Api.Features.Webhooks.Outbox;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Features.Deliveries.ProviderCallbacks.Mock;
 
 public sealed class MockProviderCallbackHandler(
     NotifyRailDbContext dbContext,
+    DeliveryWebhookOutbox webhookOutbox,
     TimeProvider timeProvider)
 {
     public async Task<MockProviderCallbackResponse?> ApplyAsync(
@@ -14,7 +16,9 @@ public sealed class MockProviderCallbackHandler(
     {
         var updatedAt = timeProvider.GetUtcNow();
 
-        await dbContext.Deliveries
+        await using var transaction = await dbContext.Database
+            .BeginTransactionAsync(cancellationToken);
+        var updated = await dbContext.Deliveries
             .Where(delivery =>
                 delivery.ProviderMessageId == providerMessageId &&
                 delivery.Status == "sent")
@@ -23,6 +27,30 @@ public sealed class MockProviderCallbackHandler(
                     .SetProperty(delivery => delivery.Status, status)
                     .SetProperty(delivery => delivery.UpdatedAt, updatedAt),
                 cancellationToken);
+
+        if (updated == 1)
+        {
+            var deliveryId = await dbContext.Deliveries
+                .Where(delivery => delivery.ProviderMessageId == providerMessageId)
+                .Select(delivery => delivery.Id)
+                .SingleAsync(cancellationToken);
+            if (status == "delivered")
+            {
+                await webhookOutbox.CreateDeliveryDeliveredAsync(
+                    deliveryId,
+                    updatedAt,
+                    cancellationToken);
+            }
+            else
+            {
+                await webhookOutbox.CreateDeliveryFailedAsync(
+                    deliveryId,
+                    updatedAt,
+                    cancellationToken);
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
 
         return await dbContext.Deliveries
             .AsNoTracking()

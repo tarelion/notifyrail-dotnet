@@ -11,6 +11,55 @@ public sealed class DeliveryWebhookOutbox(NotifyRailDbContext dbContext)
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Sent,
+            occurredAt,
+            cancellationToken);
+    }
+
+    public async Task CreateDeliveryDeliveredAsync(
+        Guid deliveryId,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Delivered,
+            occurredAt,
+            cancellationToken);
+    }
+
+    public async Task CreateDeliveryFailedAsync(
+        Guid deliveryId,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Failed,
+            occurredAt,
+            cancellationToken);
+    }
+
+    public async Task CreateDeliveryExpiredAsync(
+        Guid deliveryId,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Expired,
+            occurredAt,
+            cancellationToken);
+    }
+
+    private async Task CreateDeliveryEventAsync(
+        Guid deliveryId,
+        DeliveryWebhookEventStatus status,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
         var source = await (
             from delivery in dbContext.Deliveries
             join message in dbContext.Messages on delivery.MessageId equals message.Id
@@ -31,16 +80,17 @@ public sealed class DeliveryWebhookOutbox(NotifyRailDbContext dbContext)
             return;
         }
 
-        var sequence = await dbContext.WebhookEvents
+        var lastSequence = await dbContext.WebhookEvents
             .Where(webhookEvent => webhookEvent.DeliveryId == deliveryId)
-            .CountAsync(cancellationToken) + 1;
-        dbContext.WebhookEvents.Add(WebhookEvent.CreateDeliverySent(
+            .MaxAsync(webhookEvent => (int?)webhookEvent.Sequence, cancellationToken) ?? 0;
+        dbContext.WebhookEvents.Add(WebhookEvent.CreateDeliveryStateChanged(
             source.ApiClientId,
             source.WebhookEndpointId,
             source.MessageId,
             source.DeliveryId,
             source.Recipient,
-            sequence,
+            status,
+            lastSequence + 1,
             occurredAt));
         await dbContext.SaveChangesAsync(cancellationToken);
     }

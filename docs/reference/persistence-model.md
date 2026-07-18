@@ -129,7 +129,7 @@ Management API reads expose no plaintext or recoverable display value.
 | `webhook_endpoint_id` | `uuid` | yes | Endpoint selected when the event was created. |
 | `message_id` | `uuid` | yes | Message whose Delivery changed. |
 | `delivery_id` | `uuid` | yes | Delivery whose client-visible transition occurred. |
-| `type` | `text` | yes | Versioned event type; the first tracer bullet emits `delivery.sent`. |
+| `type` | `text` | yes | Versioned event type: `delivery.sent`, `delivery.delivered`, `delivery.failed`, or `delivery.expired`. |
 | `version` | `integer` | yes | Positive payload contract version; initially `1`. |
 | `sequence` | `integer` | yes | Positive, monotonic sequence within one Delivery. |
 | `occurred_at` | `timestamp with time zone` | yes | Delivery transition instant. |
@@ -143,7 +143,9 @@ Management API reads expose no plaintext or recoverable display value.
 | `updated_at` | `timestamp with time zone` | yes | Latest dispatch state-change instant. |
 
 `(delivery_id, sequence)` is unique. The due-work index on
-`(status, created_at)` supports the dedicated Webhook Queue. The payload is
+`(status, created_at)` supports the dedicated Webhook Queue. A lower-sequence
+event in any nonterminal dispatch state prevents a later event for the same
+Delivery from being claimed without blocking other Deliveries. The payload is
 stored as text so the bytes signed by NotifyRail are the bytes sent over HTTP.
 
 ## `webhook_attempts`
@@ -280,9 +282,14 @@ Cross-table OTP invariants:
   `(message_id, recipient)` is unique.
 - Provider-result recording inserts an Attempt and updates its Delivery in one
   transaction.
-- An accepted provider result creates `delivery.sent` in that same transaction
-  when the Message owner has an active Webhook Endpoint. A rollback leaves no
-  Webhook Event, and endpoint registration does not backfill earlier transitions.
+- A client-visible Delivery transition creates the corresponding
+  `delivery.sent`, `delivery.delivered`, `delivery.failed`, or
+  `delivery.expired` event in that same transaction when the Message owner has
+  an active Webhook Endpoint. A rollback leaves no Webhook Event, and endpoint
+  registration does not backfill earlier transitions.
+- Internal `queued`, `processing`, and `retry_scheduled` transitions create no
+  Webhook Events. Duplicate or conflicting Provider Callbacks create no
+  duplicate logical terminal event.
 - `deliveries.attempt_count` equals the number of recorded Attempts for that
   Delivery.
 - Schema changes require an EF Core migration; entity mappings and this

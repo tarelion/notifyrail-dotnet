@@ -76,24 +76,39 @@ public sealed class DeliveryQueue
             """,
             cancellationToken);
 
-        // PostgreSQL data-modifying CTEs share a snapshot and cannot see one
-        // another's table changes. The expired CTE's RETURNING output is therefore
-        // used explicitly to keep newly expired rows out of the due set.
+        var expiredDeliveryIds = await _dbContext.Database.SqlQuery<Guid>(
+            $"""
+            SELECT id AS "Value"
+            FROM deliveries
+            WHERE status IN ('queued', 'retry_scheduled', 'sent')
+                AND expires_at <= {claimTime}
+            FOR UPDATE SKIP LOCKED
+            """).ToListAsync(cancellationToken);
+        if (expiredDeliveryIds.Count > 0)
+        {
+            await _dbContext.Deliveries
+                .Where(delivery => expiredDeliveryIds.Contains(delivery.Id))
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(delivery => delivery.Status, "expired")
+                        .SetProperty(delivery => delivery.NextAttemptAt, (DateTimeOffset?)null)
+                        .SetProperty(delivery => delivery.ClaimedAt, (DateTimeOffset?)null)
+                        .SetProperty(delivery => delivery.ClaimedBy, (string?)null)
+                        .SetProperty(delivery => delivery.UpdatedAt, claimTime),
+                    cancellationToken);
+            foreach (var deliveryId in expiredDeliveryIds)
+            {
+                await _webhookOutbox.CreateDeliveryExpiredAsync(
+                    deliveryId,
+                    claimTime,
+                    cancellationToken);
+            }
+        }
+
         var rows = await _dbContext.Database
             .SqlQuery<ClaimedDeliveryRow>(
                 $"""
-                WITH expired AS (
-                    UPDATE deliveries
-                    SET
-                        status = 'expired',
-                        next_attempt_at = NULL,
-                        claimed_at = NULL,
-                        claimed_by = NULL,
-                        updated_at = {claimTime}
-                    WHERE status IN ('queued', 'retry_scheduled', 'sent')
-                        AND expires_at <= {claimTime}
-                    RETURNING id
-                ), due AS (
+                WITH due AS (
                     SELECT deliveries.id
                     FROM deliveries
                     JOIN messages ON messages.id = deliveries.message_id
@@ -113,11 +128,6 @@ public sealed class DeliveryQueue
                     AND (
                         deliveries.expires_at IS NULL
                         OR deliveries.expires_at > {claimTime}
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM expired
-                        WHERE expired.id = deliveries.id
                     )
                     ORDER BY
                         CASE messages.type
@@ -295,6 +305,13 @@ public sealed class DeliveryQueue
         if (result.Outcome == ProviderOutcome.Accepted)
         {
             await _webhookOutbox.CreateDeliverySentAsync(
+                claim.DeliveryId,
+                attemptedAt,
+                cancellationToken);
+        }
+        else if (!ShouldScheduleRetry(result.Outcome, claim.AttemptNumber))
+        {
+            await _webhookOutbox.CreateDeliveryFailedAsync(
                 claim.DeliveryId,
                 attemptedAt,
                 cancellationToken);

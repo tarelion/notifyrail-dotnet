@@ -15,6 +15,7 @@ using Microsoft.Extensions.Logging;
 using NotifyRail.Api.Features.Deliveries.ProviderCallbacks.Mock;
 using NotifyRail.Api.Features.Deliveries.Worker;
 using NotifyRail.Api.Features.Messages.CreateMessage;
+using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 namespace NotifyRail.Api.Tests;
@@ -77,6 +78,56 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
         Assert.Equal(HttpStatusCode.OK, reportResponse.StatusCode);
         Assert.Equal(0, report.RootElement.GetProperty("sent").GetInt32());
         Assert.Equal(1, report.RootElement.GetProperty("delivered").GetInt32());
+    }
+
+    [Theory]
+    [InlineData("delivered", "delivery.delivered")]
+    [InlineData("failed", "delivery.failed")]
+    public async Task MockProviderCallback_CreatesOneOrderedTerminalWebhookEvent(
+        string terminalStatus,
+        string expectedEventType)
+    {
+        await ResetDatabaseAsync();
+
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync("Provider Callback");
+        var sentDelivery = await CreateSentDeliveryAsync(client, registerWebhookEndpoint: true);
+
+        await ApplyCallbackAsync(client, sentDelivery.ProviderMessageId, terminalStatus);
+        await ApplyCallbackAsync(client, sentDelivery.ProviderMessageId, terminalStatus);
+        await ApplyCallbackAsync(
+            client,
+            sentDelivery.ProviderMessageId,
+            terminalStatus == "delivered" ? "failed" : "delivered");
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        var events = await dbContext.WebhookEvents
+            .AsNoTracking()
+            .OrderBy(webhookEvent => webhookEvent.Sequence)
+            .Select(webhookEvent => new
+            {
+                webhookEvent.Type,
+                webhookEvent.Sequence,
+                webhookEvent.Payload,
+            })
+            .ToListAsync();
+
+        Assert.Collection(
+            events,
+            sent =>
+            {
+                Assert.Equal("delivery.sent", sent.Type);
+                Assert.Equal(1, sent.Sequence);
+            },
+            terminal =>
+            {
+                Assert.Equal(expectedEventType, terminal.Type);
+                Assert.Equal(2, terminal.Sequence);
+                using var payload = JsonDocument.Parse(terminal.Payload);
+                Assert.Equal(
+                    terminalStatus,
+                    payload.RootElement.GetProperty("data").GetProperty("status").GetString());
+            });
     }
 
     [Fact]
@@ -378,7 +429,9 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
             body.RootElement.GetProperty("error").GetString());
     }
 
-    private async Task<SentDelivery> CreateSentDeliveryAsync(HttpClient client)
+    private async Task<SentDelivery> CreateSentDeliveryAsync(
+        HttpClient client,
+        bool registerWebhookEndpoint = false)
     {
         using var createResponse = await client.PostAsJsonAsync(
             "/messages",
@@ -393,6 +446,22 @@ public sealed class MockProviderCallbackEndpointIntegrationTests
 
         Assert.Equal(HttpStatusCode.Accepted, createResponse.StatusCode);
         Assert.NotNull(receipt);
+
+        if (registerWebhookEndpoint)
+        {
+            await using var endpointScope = _factory.Services.CreateAsyncScope();
+            var dbContext = endpointScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+            var apiClientId = await dbContext.Messages
+                .Where(message => message.Id == receipt.MessageId)
+                .Select(message => message.ApiClientId)
+                .SingleAsync();
+            var registrar = endpointScope.ServiceProvider
+                .GetRequiredService<WebhookEndpointRegistrar>();
+            Assert.NotNull(await registrar.RegisterAsync(
+                apiClientId,
+                "https://hooks.example.com/notifyrail",
+                CancellationToken.None));
+        }
 
         await using (var scope = _factory.Services.CreateAsyncScope())
         {

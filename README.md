@@ -53,7 +53,7 @@ vhs scripts/demo-flow.tape
 | Retry/backoff | Retryable provider failures schedule `next_attempt_at`; permanent failures stop immediately. |
 | Attempt history | Every provider send attempt is persisted and exposed through the API. |
 | Provider callbacks | Mock callbacks safely finalize `sent` deliveries without regressing terminal states. |
-| Client webhooks | Provider acceptance atomically creates `delivery.sent`; a separate PostgreSQL-backed worker sends the exact payload with a versioned HMAC signature and records each attempt. |
+| Client webhooks | Client-visible `sent`, `delivered`, `failed`, and `expired` transitions atomically create ordered Webhook Events; a separate PostgreSQL-backed worker sends exact signed payloads and records each attempt. |
 | OTP | OTP send is idempotent; verification is hashed, TTL-bound, one-time, and concurrency-safe. |
 | Reporting | Message summary and report endpoints expose aggregate delivery status counts. |
 

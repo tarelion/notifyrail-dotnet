@@ -289,18 +289,24 @@ Outcome-specific delivery transitions:
 
 ## Webhook Dispatch
 
-An accepted provider result creates one pending `delivery.sent` Webhook Event
-inside the provider-result transaction when the Message owner has an active
-Webhook Endpoint. `WebhookWorkerBackgroundService` polls this work independently
-from `DeliveryWorkerBackgroundService`.
+Client-visible Delivery transitions create pending `delivery.sent`,
+`delivery.delivered`, `delivery.failed`, or `delivery.expired` Webhook Events
+inside the same transaction as the transition when the Message owner has an
+active Webhook Endpoint. Retryable Delivery provider failures with attempts
+remaining do not create events. This contract is shared by campaign,
+transactional, and OTP Deliveries. `WebhookWorkerBackgroundService` polls the
+persisted events independently from `DeliveryWorkerBackgroundService`.
 
 `WebhookQueue.ClaimDueAsync` recovers five-minute stale claims, then claims
-pending events through `FOR UPDATE SKIP LOCKED`. The claim transaction commits
-before any HTTP request is made. Each request is a `POST` whose body is the
-exact JSON text persisted on the Webhook Event. Redirect following is disabled.
-The worker claims one event immediately before each send, up to the configured
-batch limit, so later batch items do not consume their claim lease while an
-earlier endpoint is responding.
+pending events through `FOR UPDATE SKIP LOCKED`. A candidate is skipped while a
+lower-sequence event for the same Delivery has not reached a terminal dispatch
+state. Unrelated Deliveries can still be claimed in the same batch or by
+another worker. The claim transaction commits before any HTTP request is made.
+Each request is a `POST` whose body is the exact JSON text persisted on the
+Webhook Event.
+Redirect following is disabled. The worker claims one event immediately before
+each send, up to the configured batch limit, so later batch items do not consume
+their claim lease while an earlier endpoint is responding.
 
 The outbound headers are:
 
