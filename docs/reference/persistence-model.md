@@ -3,8 +3,8 @@
 ## Purpose
 
 This page defines the PostgreSQL schema currently mapped by EF Core for
-API Clients, API Keys, messages, deliveries, delivery attempts, and OTP
-challenges. Migrations remain
+API Clients, API Keys, Webhook Endpoints, Webhook Secrets, messages,
+deliveries, delivery attempts, and OTP challenges. Migrations remain
 the executable schema history; this page is the canonical human- and
 agent-readable contract.
 
@@ -12,6 +12,7 @@ agent-readable contract.
 
 - DbContext: `src/NotifyRail.Api/Infrastructure/Persistence/NotifyRailDbContext.cs`
 - Entity mappings: `ApiClientConfiguration`, `ApiKeyConfiguration`,
+  `WebhookEndpointConfiguration`, `WebhookSecretConfiguration`,
   `MessageConfiguration`, `DeliveryConfiguration`,
   `DeliveryAttemptConfiguration`, and `OtpChallengeConfiguration`
 - Migrations: `src/NotifyRail.Api/Infrastructure/Persistence/Migrations`
@@ -19,6 +20,10 @@ agent-readable contract.
 ## Relationships
 
 - One API Client has zero or more API Keys and Messages.
+- One API Client has zero or more historical Webhook Endpoints and at most one
+  active Webhook Endpoint.
+- One API Client has zero or one initial Webhook Secret. Secret rotation may
+  extend that relationship in a later schema migration.
 - One message has one delivery per normalized recipient.
 - Each delivery references one message through `deliveries.message_id`.
 - Each delivery attempt references one delivery through
@@ -67,6 +72,50 @@ Indexes and uniqueness:
 - Primary key on `id`.
 - Unique constraint `api_keys_lookup_id_key` on `lookup_id`.
 - Index on `api_client_id` for credential lookup by owner.
+
+## `webhook_endpoints`
+
+| Column | PostgreSQL type | Required | Contract |
+| --- | --- | --- | --- |
+| `id` | `uuid` | yes | Primary key; defaults to `gen_random_uuid()`. Replacement creates a new identifier. |
+| `api_client_id` | `uuid` | yes | References the owning `api_clients(id)`. |
+| `url` | `text` | yes | Non-blank normalized absolute endpoint URL. Management API validation defines the accepted URL policy. |
+| `is_enabled` | `boolean` | yes | Whether new Webhook Events may target the endpoint; defaults to `true`. |
+| `created_at` | `timestamp with time zone` | yes | Resource creation instant. |
+| `updated_at` | `timestamp with time zone` | yes | Latest state-change instant. |
+| `disabled_at` | `timestamp with time zone` | no | Required exactly when `is_enabled` is `false`. |
+
+Indexes and uniqueness:
+
+- Primary key on `id`.
+- Partial unique index `webhook_endpoints_active_api_client_id_key` on
+  `api_client_id` where `is_enabled` is true. PostgreSQL therefore enforces at
+  most one active Webhook Endpoint for each API Client.
+- Index `webhook_endpoints_api_client_created_at_idx` on
+  `(api_client_id, created_at)` for current and historical inspection.
+
+Replacing an active endpoint disables the old row before inserting the new
+row in one transaction. Disabling an endpoint does not disable its API Client.
+
+## `webhook_secrets`
+
+| Column | PostgreSQL type | Required | Contract |
+| --- | --- | --- | --- |
+| `id` | `uuid` | yes | Primary key; defaults to `gen_random_uuid()`. |
+| `api_client_id` | `uuid` | yes | Unique reference to the owning `api_clients(id)`. |
+| `protected_value` | `bytea` | yes | Non-empty .NET Data Protection ciphertext; plaintext is never persisted. |
+| `created_at` | `timestamp with time zone` | yes | Secret creation instant. |
+
+Indexes and uniqueness:
+
+- Primary key on `id`.
+- Unique index `webhook_secrets_api_client_id_key` on `api_client_id`.
+
+The `IWebhookSecretProtector` boundary uses the purpose
+`NotifyRail.Webhooks.Secrets.v1`. Data Protection keys live in the configured
+filesystem key ring rather than the application database. The initial
+`nrs_<secret>` credential is returned only on creation; later persistence and
+Management API reads expose no plaintext or recoverable display value.
 
 ## `messages`
 
@@ -188,3 +237,5 @@ Cross-table OTP invariants:
   Delivery.
 - Schema changes require an EF Core migration; entity mappings and this
   reference must be updated with the migration.
+- Enabling or replacing a Webhook Endpoint does not backfill historical
+  Delivery transitions.

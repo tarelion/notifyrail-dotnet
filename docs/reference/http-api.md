@@ -10,6 +10,8 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 - Runtime wiring: `src/NotifyRail.Api/Program.cs`
 - Health endpoints: `src/NotifyRail.Api/Features/Health`
 - Management API Client endpoints: `src/NotifyRail.Api/Features/ApiClients`
+- Management Webhook Endpoint operations:
+  `src/NotifyRail.Api/Features/Webhooks/ManageWebhookEndpoint`
 - Message endpoint: `src/NotifyRail.Api/Features/Messages/CreateMessage`
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
 - Message summary endpoint:
@@ -193,6 +195,102 @@ Client. Repeating the operation is idempotent and preserves the original
 
 An API Key fails authentication when its expiry time has been reached or it has
 been revoked. Failed authentication does not update `last_used_at`.
+
+## `PUT /management/api-clients/{api_client_id}/webhook-endpoint`
+
+Registers the first active Webhook Endpoint or explicitly replaces the active
+endpoint with a new resource. Requires the `Operator` policy. An API Client may
+exist without calling this operation and continues to use polling when it has
+no active endpoint.
+
+Request:
+
+```json
+{"url":"https://client.example.com/notifyrail-events"}
+```
+
+The first registration returns `201 Created` and issues the API Client's
+initial Webhook Secret:
+
+```json
+{
+  "webhook_endpoint_id": "6c932de0-8a5c-4be8-b41e-c9ca33554bea",
+  "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "url": "https://client.example.com/notifyrail-events",
+  "is_enabled": true,
+  "created_at": "2026-07-18T12:00:00Z",
+  "updated_at": "2026-07-18T12:00:00Z",
+  "webhook_secret": "nrs_<secret>"
+}
+```
+
+`webhook_secret` is high entropy and appears only when the first secret is
+created. NotifyRail protects it before persistence; later inspection and
+replacement responses never return it. Replacing an active endpoint returns
+`200 OK`, disables the previous Webhook Endpoint, creates a new active resource,
+and omits `webhook_secret` from the response.
+
+| Status | Condition |
+| --- | --- |
+| `201 Created` | The API Client's first endpoint and initial secret are created. |
+| `200 OK` | A new endpoint replaces a previous active or disabled endpoint; the existing secret is not returned. |
+| `400 Bad Request` | `url` is not an absolute HTTP(S) URL, contains user information or a fragment, uses public HTTP, or violates the localhost policy. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+| `404 Not Found` | The API Client does not exist. |
+
+Public endpoint URLs require HTTPS. Loopback URLs are rejected unless
+`Webhooks:AllowLocalhostEndpoints` is explicitly `true`; with that setting,
+HTTP or HTTPS loopback URLs are accepted for development and tests. Complete
+address and DNS validation at dispatch time is not part of this configuration
+operation yet.
+
+Registering or replacing an endpoint does not create Webhook Events for
+historical Delivery transitions.
+
+## `GET /management/api-clients/{api_client_id}/webhook-endpoint`
+
+Returns the most recently configured Webhook Endpoint, including its enabled
+state and `disabled_at` metadata. Requires the `Operator` policy and never
+returns `webhook_secret` or protected secret material.
+
+```json
+{
+  "webhook_endpoint_id": "6c932de0-8a5c-4be8-b41e-c9ca33554bea",
+  "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "url": "https://client.example.com/notifyrail-events",
+  "is_enabled": false,
+  "created_at": "2026-07-18T12:00:00Z",
+  "updated_at": "2026-07-18T13:00:00Z",
+  "disabled_at": "2026-07-18T13:00:00Z"
+}
+```
+
+| Status | Condition |
+| --- | --- |
+| `200 OK` | The API Client has configured an endpoint, whether enabled or disabled. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+| `404 Not Found` | The API Client does not exist or has never configured an endpoint. |
+
+## `POST /management/api-clients/{api_client_id}/webhook-endpoint/disable`
+
+Disables the active Webhook Endpoint without disabling its API Client.
+Repeating the operation is idempotent, including when the API Client has no
+active endpoint. The API Client remains able to authenticate and poll existing
+read endpoints.
+
+| Status | Condition |
+| --- | --- |
+| `204 No Content` | The API Client exists; its active endpoint, if any, is disabled. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+| `404 Not Found` | The API Client does not exist. |
+
+## Webhook Secret protection configuration
+
+`Webhooks:DataProtectionKeyRingPath` selects the filesystem directory used by
+.NET Data Protection for Webhook Secret encryption keys. The key ring is not
+stored in PostgreSQL. Local Compose services mount the shared,
+persistent `data_protection_keys` volume at
+`/var/lib/notifyrail/data-protection-keys`.
 
 ## `GET /healthz`
 
