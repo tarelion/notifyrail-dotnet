@@ -50,6 +50,7 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `WebhookWorker:MinimumRetryDelay` | configuration / `WebhookWorkerOptions.MinimumRetryDelay` | `1s` | Positive lower safety bound for computed delays and valid `Retry-After` values. |
 | `WebhookWorker:MaximumRetryDelay` | configuration / `WebhookWorkerOptions.MaximumRetryDelay` | `1h` | Upper safety bound not less than the base delay. |
 | `WebhookWorker:JitterRatio` | configuration / `WebhookWorkerOptions.JitterRatio` | `0.2` | Random proportional offset in the inclusive range `0` to `1`; `0.2` gives a multiplier from `0.8` through `1.2`. |
+| `WebhookWorker:ClaimTimeout` | configuration / `WebhookWorkerOptions.ClaimTimeout` | `5m` | Positive lease duration after which an in-progress event is eligible for recovery. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 | `MockProviderCallback:Secret` | configuration / `MockProviderCallbackOptions.Secret` | none | Required provider-specific HMAC secret for authenticating mock Provider Callbacks. It is separate from API Keys, Operator Credentials, and Webhook Secrets. |
 | `MockProviderCallback:SignatureTolerance` | configuration / `MockProviderCallbackOptions.SignatureTolerance` | `00:05:00` | Maximum accepted clock difference in either direction for mock Provider Callback signatures. |
@@ -301,14 +302,15 @@ remaining do not create events. This contract is shared by campaign,
 transactional, and OTP Deliveries. `WebhookWorkerBackgroundService` polls the
 persisted events independently from `DeliveryWorkerBackgroundService`.
 
-`WebhookQueue.ClaimDueAsync` recovers five-minute stale claims, then claims
-pending events and due `retry_scheduled` events through `FOR UPDATE SKIP
-LOCKED`. A retry is not claimable before `next_attempt_at`. A candidate is
-skipped while a lower-sequence event for the same Delivery has not reached a
-terminal dispatch state. Unrelated Deliveries can still be claimed in the same
-batch or by another worker. The claim transaction commits before any HTTP
-request is made. Each request is a `POST` whose body is the exact JSON text
-persisted on the Webhook Event.
+`WebhookQueue.ClaimDueAsync` claims pending events, due `retry_scheduled`
+events, and in-progress events whose configurable claim lease has expired
+through one `FOR UPDATE SKIP LOCKED` statement. A retry is not claimable before
+`next_attempt_at`. Locked stale events are skipped instead of blocking claims
+for unrelated Deliveries. A candidate is skipped while a lower-sequence event
+for the same Delivery has not reached a terminal dispatch state. Unrelated
+Deliveries can still be claimed in the same batch or by another worker. The
+claim transaction commits before any HTTP request is made. Each request is a
+`POST` whose body is the exact JSON text persisted on the Webhook Event.
 Redirect following is disabled. The worker claims one event immediately before
 each send, up to the configured batch limit, so later batch items do not consume
 their claim lease while an earlier endpoint is responding.
@@ -348,6 +350,12 @@ Network and timeout diagnostics are normalized rather than persisting raw
 exception or endpoint details.
 Webhook dispatch state never changes Delivery status.
 
+A timeout or other ambiguous response records a retryable Webhook Attempt. The
+next dispatch reuses the same Webhook Event identifier and exact persisted JSON
+payload, including its version, occurrence time, Delivery sequence, and data.
+The receiver may therefore observe the logical event more than once and must
+deduplicate by event identifier.
+
 The canonical table, relationship, constraint, and index definitions are in
 the [persistence model reference](persistence-model.md).
 
@@ -356,4 +364,3 @@ the [persistence model reference](persistence-model.md).
 - The 24-hour automatic retry deadline and Dead Webhook Event transition are
   delivered by the later dead-event slice; until then, transient outcomes keep
   scheduling retries.
-- The stale claim lease is not configurable.

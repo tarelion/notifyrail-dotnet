@@ -466,6 +466,22 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Fact]
+    public void Startup_RejectsNonPositiveClaimTimeout()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("WebhookWorker:ClaimTimeout", "00:00:00");
+        });
+
+        var exception = Assert.Throws<OptionsValidationException>(factory.CreateClient);
+
+        Assert.Contains(
+            "ClaimTimeout must be greater than zero",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ProcessBatchAsync_SchedulesNetworkErrorWithoutPersistingEndpointDetail()
     {
         await ResetDatabaseAsync();
