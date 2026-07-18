@@ -22,9 +22,9 @@ public sealed class WebhookEndpointUrlValidator(IOptions<WebhookOptions> options
             return false;
         }
 
-        var isLocalhost = uri.IsLoopback ||
-            string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) ||
-            (IPAddress.TryParse(uri.Host, out var address) && IPAddress.IsLoopback(address));
+        var host = uri.IdnHost.TrimEnd('.');
+        var isLocalhost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            IsLoopbackAddress(host);
 
         if (uri.Scheme != Uri.UriSchemeHttps &&
             !(isLocalhost && options.Value.AllowLocalhostEndpoints))
@@ -42,5 +42,22 @@ public sealed class WebhookEndpointUrlValidator(IOptions<WebhookOptions> options
         normalized = uri.AbsoluteUri;
         error = string.Empty;
         return true;
+    }
+
+    private static bool IsLoopbackAddress(string host)
+    {
+        if (!IPAddress.TryParse(host, out var address))
+        {
+            return false;
+        }
+
+        if (address.IsIPv4MappedToIPv6)
+        {
+            address = address.MapToIPv4();
+        }
+
+        return IPAddress.IsLoopback(address) ||
+            (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                address.GetAddressBytes()[0] == 127);
     }
 }

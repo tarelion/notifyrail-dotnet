@@ -25,13 +25,20 @@ public sealed class WebhookEndpointRegistrar(
             return null;
         }
 
-        var now = timeProvider.GetUtcNow();
+        var now = PostgresTimestamp.Normalize(timeProvider.GetUtcNow());
         var current = await dbContext.WebhookEndpoints
             .SingleOrDefaultAsync(
                 endpoint => endpoint.ApiClientId == apiClientId && endpoint.IsEnabled,
                 cancellationToken);
+        if (current is not null && string.Equals(current.Url, url, StringComparison.Ordinal))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return CreateResponse(current, plaintextSecret: null);
+        }
+
         if (current is not null)
         {
+            now = NextTimestamp(now, current.CreatedAt);
             current.Disable(now);
             await dbContext.SaveChangesAsync(cancellationToken);
         }
@@ -53,6 +60,13 @@ public sealed class WebhookEndpointRegistrar(
         await dbContext.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
+        return CreateResponse(endpoint, plaintextSecret);
+    }
+
+    private static RegisterWebhookEndpointResponse CreateResponse(
+        WebhookEndpoint endpoint,
+        string? plaintextSecret)
+    {
         return new RegisterWebhookEndpointResponse(
             endpoint.Id,
             endpoint.ApiClientId,
@@ -61,5 +75,12 @@ public sealed class WebhookEndpointRegistrar(
             endpoint.CreatedAt,
             endpoint.UpdatedAt,
             plaintextSecret);
+    }
+
+    private static DateTimeOffset NextTimestamp(
+        DateTimeOffset candidate,
+        DateTimeOffset previous)
+    {
+        return candidate > previous ? candidate : previous.AddTicks(10);
     }
 }

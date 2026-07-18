@@ -19,7 +19,8 @@ public sealed class WebhookEndpointReader(NotifyRailDbContext dbContext)
         return await dbContext.WebhookEndpoints
             .AsNoTracking()
             .Where(endpoint => endpoint.ApiClientId == apiClientId)
-            .OrderByDescending(endpoint => endpoint.CreatedAt)
+            .OrderByDescending(endpoint => endpoint.IsEnabled)
+            .ThenByDescending(endpoint => endpoint.CreatedAt)
             .ThenByDescending(endpoint => endpoint.Id)
             .Select(endpoint => new InspectWebhookEndpointResponse(
                 endpoint.Id,

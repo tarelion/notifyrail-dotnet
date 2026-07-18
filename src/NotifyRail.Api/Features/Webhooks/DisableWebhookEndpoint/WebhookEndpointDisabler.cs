@@ -27,7 +27,13 @@ public sealed class WebhookEndpointDisabler(
                 cancellationToken);
         if (endpoint is not null)
         {
-            endpoint.Disable(timeProvider.GetUtcNow());
+            var disabledAt = PostgresTimestamp.Normalize(timeProvider.GetUtcNow());
+            if (disabledAt <= endpoint.UpdatedAt)
+            {
+                disabledAt = endpoint.UpdatedAt.AddTicks(10);
+            }
+
+            endpoint.Disable(disabledAt);
             await dbContext.SaveChangesAsync(cancellationToken);
         }
 

@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using NotifyRail.Api.Infrastructure.Persistence;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Features.Webhooks.Persistence;
@@ -54,6 +55,7 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
         Assert.NotEqual(Guid.Empty, registered.WebhookEndpointId);
         Assert.Equal(apiClient.ApiClientId, registered.ApiClientId);
         Assert.Equal("https://hooks.example.com/notifyrail", registered.Url);
+        Assert.NotNull(registered.WebhookSecret);
         Assert.StartsWith("nrs_", registered.WebhookSecret, StringComparison.Ordinal);
 
         using var inspectResponse = await client.GetAsync(
@@ -151,6 +153,83 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task RegisterWebhookEndpoint_PreservesActiveResource_WhenPutIsRetried()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = CreateOperatorClient();
+        var apiClient = await CreateApiClientAsync(client);
+        var route = $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint";
+        using var firstResponse = await client.PutAsJsonAsync(
+            route,
+            new { url = "https://stable.example.com/webhooks" });
+        var first = await firstResponse.Content
+            .ReadFromJsonAsync<RegisterWebhookEndpointResponse>();
+        Assert.NotNull(first);
+
+        using var retryResponse = await client.PutAsJsonAsync(
+            route,
+            new { url = "https://stable.example.com/webhooks" });
+        using var retryDocument = JsonDocument.Parse(
+            await retryResponse.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, retryResponse.StatusCode);
+        Assert.Equal(
+            first.WebhookEndpointId,
+            retryDocument.RootElement.GetProperty("webhook_endpoint_id").GetGuid());
+        Assert.Equal(
+            first.CreatedAt,
+            retryDocument.RootElement.GetProperty("created_at").GetDateTimeOffset());
+        Assert.False(retryDocument.RootElement.TryGetProperty("webhook_secret", out _));
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        Assert.Equal(
+            1,
+            await dbContext.WebhookEndpoints.CountAsync(
+                endpoint => endpoint.ApiClientId == apiClient.ApiClientId));
+    }
+
+    [Fact]
+    public async Task InspectWebhookEndpoint_ReturnsLatestEndpoint_WhenClockDoesNotAdvance()
+    {
+        using var factory = CreateFactory(services =>
+        {
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(new FixedTimeProvider(
+                new DateTimeOffset(2026, 7, 18, 12, 0, 0, TimeSpan.Zero)));
+        });
+        await EnsureDatabaseReadyAsync(factory);
+
+        using var client = CreateOperatorClient(factory);
+        var apiClient = await CreateApiClientAsync(client);
+        var route = $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint";
+        using var firstResponse = await client.PutAsJsonAsync(
+            route,
+            new { url = "https://first.example.com/webhooks" });
+        var first = await firstResponse.Content
+            .ReadFromJsonAsync<RegisterWebhookEndpointResponse>();
+        using var secondResponse = await client.PutAsJsonAsync(
+            route,
+            new { url = "https://second.example.com/webhooks" });
+        var second = await secondResponse.Content
+            .ReadFromJsonAsync<RegisterWebhookEndpointResponse>();
+        using var inspectResponse = await client.GetAsync(route);
+        using var inspected = JsonDocument.Parse(
+            await inspectResponse.Content.ReadAsStringAsync());
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.True(second.CreatedAt > first.CreatedAt);
+        Assert.Equal(
+            second.WebhookEndpointId,
+            inspected.RootElement.GetProperty("webhook_endpoint_id").GetGuid());
+        Assert.Equal(
+            "https://second.example.com/webhooks",
+            inspected.RootElement.GetProperty("url").GetString());
+    }
+
+    [Fact]
     public async Task RegisterWebhookEndpoint_EncryptsSecretThroughWebhookProtectionBoundary()
     {
         await EnsureDatabaseReadyAsync();
@@ -165,6 +244,7 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.NotNull(registered);
+        Assert.NotNull(registered.WebhookSecret);
 
         await using var scope = _factory.Services.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
@@ -187,6 +267,9 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     [InlineData("ftp://hooks.example.com/webhooks")]
     [InlineData("http://hooks.example.com/webhooks")]
     [InlineData("https://localhost:8443/webhooks")]
+    [InlineData("https://localhost./webhooks")]
+    [InlineData("https://127.0.0.2/webhooks")]
+    [InlineData("https://[::ffff:127.0.0.2]/webhooks")]
     public async Task RegisterWebhookEndpoint_ReturnsBadRequest_WhenUrlViolatesBasicPolicy(
         string url)
     {
@@ -279,6 +362,23 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
         return CreateOperatorClient(_factory);
     }
 
+    private static WebApplicationFactory<Program> CreateFactory(
+        Action<IServiceCollection>? configureServices = null)
+    {
+        return new WebApplicationFactory<Program>()
+            .WithoutHostedServices()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseSetting(
+                    "Authentication:Operator:Credential",
+                    OperatorCredential);
+                if (configureServices is not null)
+                {
+                    builder.ConfigureServices(configureServices);
+                }
+            });
+    }
+
     private static HttpClient CreateOperatorClient(WebApplicationFactory<Program> factory)
     {
         var client = factory.CreateClient();
@@ -322,9 +422,15 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
         [property: JsonPropertyName("webhook_endpoint_id")] Guid WebhookEndpointId,
         [property: JsonPropertyName("api_client_id")] Guid ApiClientId,
         [property: JsonPropertyName("url")] string Url,
-        [property: JsonPropertyName("webhook_secret")] string WebhookSecret);
+        [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
+        [property: JsonPropertyName("webhook_secret")] string? WebhookSecret);
 
     private sealed record InspectWebhookEndpointResponse(
         [property: JsonPropertyName("is_enabled")] bool IsEnabled,
         [property: JsonPropertyName("disabled_at")] DateTimeOffset? DisabledAt);
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
 }

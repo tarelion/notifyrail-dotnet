@@ -232,6 +232,10 @@ replacement responses never return it. Replacing an active endpoint returns
 `200 OK`, disables the previous Webhook Endpoint, creates a new active resource,
 and omits `webhook_secret` from the response.
 
+Repeating `PUT` with the active endpoint's normalized URL is idempotent: it
+returns `200 OK`, preserves the existing resource identifier and timestamps,
+and does not return the Webhook Secret again.
+
 | Status | Condition |
 | --- | --- |
 | `201 Created` | The API Client's first endpoint and initial secret are created. |
@@ -240,7 +244,8 @@ and omits `webhook_secret` from the response.
 | `401 Unauthorized` | The Operator credential is missing or invalid. |
 | `404 Not Found` | The API Client does not exist. |
 
-Public endpoint URLs require HTTPS. Loopback URLs are rejected unless
+Public endpoint URLs require HTTPS. Localhost names and loopback IP addresses,
+including equivalent trailing-dot and IPv4-mapped IPv6 forms, are rejected unless
 `Webhooks:AllowLocalhostEndpoints` is explicitly `true`; with that setting,
 HTTP or HTTPS loopback URLs are accepted for development and tests. Complete
 address and DNS validation at dispatch time is not part of this configuration
