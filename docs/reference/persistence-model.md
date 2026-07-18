@@ -134,8 +134,9 @@ Management API reads expose no plaintext or recoverable display value.
 | `sequence` | `integer` | yes | Positive, monotonic sequence within one Delivery. |
 | `occurred_at` | `timestamp with time zone` | yes | Delivery transition instant. |
 | `payload` | `text` | yes | Exact serialized JSON body used for signing and dispatch. |
-| `status` | `text` | yes | One of `pending`, `processing`, `succeeded`, or `failed`. |
+| `status` | `text` | yes | One of `pending`, `processing`, `retry_scheduled`, `succeeded`, or `failed`. |
 | `attempt_count` | `integer` | yes | Number of recorded Webhook Attempts; defaults to zero. |
+| `next_attempt_at` | `timestamp with time zone` | no | Required exactly while `retry_scheduled`; earliest time the event may be claimed again. |
 | `claimed_at` | `timestamp with time zone` | no | Claim instant, present only while processing. |
 | `claimed_by` | `text` | no | Non-blank worker identity, present only while processing. |
 | `succeeded_at` | `timestamp with time zone` | no | Present exactly when status is `succeeded`. |
@@ -143,10 +144,11 @@ Management API reads expose no plaintext or recoverable display value.
 | `updated_at` | `timestamp with time zone` | yes | Latest dispatch state-change instant. |
 
 `(delivery_id, sequence)` is unique. The due-work index on
-`(status, created_at)` supports the dedicated Webhook Queue. A lower-sequence
-event in any nonterminal dispatch state prevents a later event for the same
-Delivery from being claimed without blocking other Deliveries. The payload is
-stored as text so the bytes signed by NotifyRail are the bytes sent over HTTP.
+`(status, next_attempt_at, created_at)` supports the dedicated Webhook Queue. A
+lower-sequence event in any nonterminal dispatch state prevents a later event
+for the same Delivery from being claimed without blocking other Deliveries.
+The payload is stored as text so the bytes signed by NotifyRail are the bytes
+sent over HTTP.
 
 ## `webhook_attempts`
 
@@ -155,7 +157,7 @@ stored as text so the bytes signed by NotifyRail are the bytes sent over HTTP.
 | `id` | `uuid` | yes | Primary key; defaults to `gen_random_uuid()`. |
 | `webhook_event_id` | `uuid` | yes | Webhook Event dispatched by this attempt. |
 | `attempt_number` | `integer` | yes | Positive, one-based attempt number within the event. |
-| `outcome` | `text` | yes | `succeeded` or `failed`. |
+| `outcome` | `text` | yes | `succeeded`, `retryable_failure`, or `permanent_failure`. |
 | `http_status_code` | `integer` | no | HTTP status between 100 and 599 when a response exists. |
 | `error_code` | `text` | no | Normalized diagnostic bounded to 100 characters. |
 | `error_message` | `text` | no | Diagnostic bounded to 500 characters; response bodies are excluded. |

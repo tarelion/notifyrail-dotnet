@@ -18,8 +18,12 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
             table.HasCheckConstraint("webhook_events_payload_check", "btrim(payload) <> ''");
             table.HasCheckConstraint(
                 "webhook_events_status_check",
-                "status IN ('pending', 'processing', 'succeeded', 'failed')");
+                "status IN ('pending', 'processing', 'retry_scheduled', 'succeeded', 'failed')");
             table.HasCheckConstraint("webhook_events_attempt_count_check", "attempt_count >= 0");
+            table.HasCheckConstraint(
+                "webhook_events_retry_schedule_check",
+                "(status = 'retry_scheduled' AND next_attempt_at IS NOT NULL) " +
+                "OR (status <> 'retry_scheduled' AND next_attempt_at IS NULL)");
             table.HasCheckConstraint(
                 "webhook_events_claim_check",
                 "(status = 'processing' AND claimed_at IS NOT NULL AND btrim(claimed_by) <> '') " +
@@ -46,6 +50,8 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
         builder.Property(webhookEvent => webhookEvent.Status)
             .HasColumnName("status").HasColumnType("text");
         builder.Property(webhookEvent => webhookEvent.AttemptCount).HasColumnName("attempt_count");
+        builder.Property(webhookEvent => webhookEvent.NextAttemptAt)
+            .HasColumnName("next_attempt_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.ClaimedAt)
             .HasColumnName("claimed_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.ClaimedBy)
@@ -60,7 +66,8 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
         builder.HasIndex(webhookEvent => new { webhookEvent.DeliveryId, webhookEvent.Sequence })
             .IsUnique()
             .HasDatabaseName("webhook_events_delivery_id_sequence_key");
-        builder.HasIndex(webhookEvent => new { webhookEvent.Status, webhookEvent.CreatedAt })
+        builder.HasIndex(webhookEvent => new
+            { webhookEvent.Status, webhookEvent.NextAttemptAt, webhookEvent.CreatedAt })
             .HasDatabaseName("webhook_events_due_idx");
 
         builder.HasOne<ApiClient>().WithMany().HasForeignKey(webhookEvent => webhookEvent.ApiClientId)

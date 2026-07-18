@@ -81,8 +81,18 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.Configure<WebhookOptions>(
         builder.Configuration.GetSection(WebhookOptions.SectionName));
-    builder.Services.Configure<WebhookWorkerOptions>(
-        builder.Configuration.GetSection(WebhookWorkerOptions.SectionName));
+    builder.Services.AddOptions<WebhookWorkerOptions>()
+        .Bind(builder.Configuration.GetSection(WebhookWorkerOptions.SectionName))
+        .Validate(options => options.MinimumRetryDelay > TimeSpan.Zero,
+            "WebhookWorker:MinimumRetryDelay must be greater than zero.")
+        .Validate(options => options.BaseRetryDelay >= options.MinimumRetryDelay,
+            "WebhookWorker:BaseRetryDelay must not be less than MinimumRetryDelay.")
+        .Validate(options => options.MaximumRetryDelay >= options.BaseRetryDelay,
+            "WebhookWorker:MaximumRetryDelay must not be less than BaseRetryDelay.")
+        .Validate(options => options.JitterRatio is >= 0 and <= 1,
+            "WebhookWorker:JitterRatio must be between zero and one.")
+        .ValidateOnStart();
+    builder.Services.AddSingleton<IWebhookRetryJitter, RandomWebhookRetryJitter>();
     builder.Services.AddSingleton<IWebhookSecretProtector, DataProtectionWebhookSecretProtector>();
     builder.Services.AddSingleton<WebhookEndpointUrlValidator>();
     builder.Services.AddScoped<WebhookEndpointRegistrar>();
