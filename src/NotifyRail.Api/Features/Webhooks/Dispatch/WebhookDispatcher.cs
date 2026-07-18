@@ -51,23 +51,28 @@ public sealed class WebhookDispatcher(
                 outcome == WebhookOutcome.Succeeded ? null : "http_error",
                 outcome == WebhookOutcome.Succeeded ? null : $"Webhook endpoint returned HTTP {statusCode}.",
                 outcome == WebhookOutcome.RetryableFailure
-                    ? ParseRetryAfter(response, timestamp)
+                    ? ParseRetryAfter(response)
                     : null);
         }
         catch (Exception exception) when (
-            !cancellationToken.IsCancellationRequested
-            && exception is HttpRequestException or TimeoutException or TaskCanceledException)
+            exception is HttpRequestException or TimeoutException or TaskCanceledException)
         {
             stopwatch.Stop();
-            var timedOut = exception is TimeoutException or TaskCanceledException;
+            var requestCanceled = cancellationToken.IsCancellationRequested;
+            var timedOut = !requestCanceled
+                && exception is TimeoutException or TaskCanceledException;
+            var errorCode = requestCanceled ? "request_canceled" : timedOut ? "timeout" : "network_error";
+            var errorMessage = requestCanceled
+                ? "Webhook request was canceled after dispatch started."
+                : timedOut
+                    ? "Webhook request timed out."
+                    : "Webhook request failed before a response was received.";
             return new WebhookResult(
                 WebhookOutcome.RetryableFailure,
                 HttpStatusCode: null,
                 stopwatch.ElapsedMilliseconds,
-                timedOut ? "timeout" : "network_error",
-                timedOut
-                    ? "Webhook request timed out."
-                    : "Webhook request failed before a response was received.");
+                errorCode,
+                errorMessage);
         }
     }
 
@@ -78,16 +83,14 @@ public sealed class WebhookDispatcher(
         return $"v1={Convert.ToHexStringLower(hash)}";
     }
 
-    private static TimeSpan? ParseRetryAfter(
-        HttpResponseMessage response,
-        DateTimeOffset requestedAt)
+    private static WebhookRetryAfter? ParseRetryAfter(HttpResponseMessage response)
     {
         if (!response.Headers.TryGetValues("Retry-After", out var values))
         {
             return null;
         }
 
-        var value = values.SingleOrDefault();
+        var value = values.FirstOrDefault();
         if (!RetryConditionHeaderValue.TryParse(value, out var retryAfter))
         {
             return null;
@@ -95,11 +98,11 @@ public sealed class WebhookDispatcher(
 
         if (retryAfter.Delta is { } delta)
         {
-            return delta;
+            return new WebhookRetryAfter.Relative(delta);
         }
 
         return retryAfter.Date is { } date
-            ? TimeSpan.FromTicks(Math.Max(0, (date - requestedAt).Ticks))
+            ? new WebhookRetryAfter.Absolute(date)
             : null;
     }
 }

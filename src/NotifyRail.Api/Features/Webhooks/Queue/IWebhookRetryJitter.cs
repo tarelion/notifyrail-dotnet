@@ -2,12 +2,12 @@ namespace NotifyRail.Api.Features.Webhooks.Queue;
 
 public interface IWebhookRetryJitter
 {
-    double NextDouble();
+    double NextUnitIntervalSample();
 }
 
 internal sealed class RandomWebhookRetryJitter : IWebhookRetryJitter
 {
-    public double NextDouble()
+    public double NextUnitIntervalSample()
     {
         return Random.Shared.NextDouble();
     }

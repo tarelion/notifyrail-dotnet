@@ -151,7 +151,7 @@ public sealed class WebhookQueue
                 nameof(result), result.Outcome, "Unknown webhook outcome."),
         };
         var nextAttemptAt = retryable
-            ? completedAt.Add(RetryDelay(claim.AttemptNumber, result.RetryAfter))
+            ? completedAt.Add(RetryDelay(claim.AttemptNumber, result.RetryAfter, completedAt))
             : (DateTimeOffset?)null;
 
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
@@ -207,17 +207,28 @@ public sealed class WebhookQueue
         return normalized.Length <= maximumLength ? normalized : normalized[..maximumLength];
     }
 
-    private TimeSpan RetryDelay(int attemptNumber, TimeSpan? retryAfter)
+    private TimeSpan RetryDelay(
+        int attemptNumber,
+        WebhookRetryAfter? retryAfter,
+        DateTimeOffset completedAt)
     {
-        if (retryAfter is { } requestedDelay)
+        var requestedDelay = retryAfter switch
+        {
+            WebhookRetryAfter.Relative relative => relative.Delay,
+            WebhookRetryAfter.Absolute absolute => absolute.RetryAt - completedAt,
+            null => (TimeSpan?)null,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(retryAfter), retryAfter, "Unknown Retry-After value."),
+        };
+        if (requestedDelay is { } delay)
         {
             return TimeSpan.FromTicks(Math.Clamp(
-                requestedDelay.Ticks,
+                delay.Ticks,
                 _minimumRetryDelay.Ticks,
                 _maximumRetryDelay.Ticks));
         }
 
-        var jitterValue = _jitter.NextDouble();
+        var jitterValue = _jitter.NextUnitIntervalSample();
         if (jitterValue is < 0 or > 1)
         {
             throw new InvalidOperationException("Webhook retry jitter must be between zero and one.");
