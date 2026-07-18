@@ -88,6 +88,9 @@ paths easy to demonstrate.
 | `POST /management/api-clients/{id}/api-keys` | Create an additional rotatable API Key |
 | `GET /management/api-clients/{id}/api-keys` | List API Key lifecycle metadata |
 | `POST /management/api-clients/{id}/api-keys/{key_id}/revoke` | Permanently revoke one API Key |
+| `PUT /management/api-clients/{id}/webhook-endpoint` | Register or explicitly replace a Webhook Endpoint |
+| `GET /management/api-clients/{id}/webhook-endpoint` | Inspect the latest Webhook Endpoint without revealing its secret |
+| `POST /management/api-clients/{id}/webhook-endpoint/disable` | Disable the active Webhook Endpoint without disabling its API Client |
 | `GET /api-client` | Validate an API Key and return its API Client identity |
 | `POST /messages` | Idempotent message and delivery creation |
 | `GET /messages/{message_id}` | Message metadata and delivery status counts |

@@ -21,6 +21,9 @@ services:
     environment:
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=notifyrail;Username=notifyrail;Password=notifyrail
       MockProviderCallback__Secret: ${NOTIFYRAIL_MOCK_PROVIDER_CALLBACK_SECRET:-notifyrail-local-compose-callback-secret-change-me}
+      Webhooks__DataProtectionKeyRingPath: /var/lib/notifyrail/data-protection-keys
+    volumes:
+      - data_protection_keys:/var/lib/notifyrail/data-protection-keys
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,6 +42,9 @@ services:
       Otp__Secret: ${NOTIFYRAIL_OTP_SECRET:-notifyrail-local-compose-secret-change-me}
       Authentication__Operator__Credential: ${NOTIFYRAIL_OPERATOR_CREDENTIAL:-}
       MockProviderCallback__Secret: ${NOTIFYRAIL_MOCK_PROVIDER_CALLBACK_SECRET:-notifyrail-local-compose-callback-secret-change-me}
+      Webhooks__DataProtectionKeyRingPath: /var/lib/notifyrail/data-protection-keys
+    volumes:
+      - data_protection_keys:/var/lib/notifyrail/data-protection-keys
     ports:
       - "127.0.0.1:5012:8080"
     depends_on:
@@ -84,4 +90,5 @@ services:
         condition: service_healthy
 
 volumes:
+  data_protection_keys:
   postgres_data:
