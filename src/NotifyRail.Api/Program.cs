@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using NotifyRail.Api.Authentication;
 using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.ApiClients.CreateApiKey;
@@ -91,6 +92,12 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
             "WebhookWorker:MaximumRetryDelay must not be less than BaseRetryDelay.")
         .Validate(options => options.JitterRatio is >= 0 and <= 1,
             "WebhookWorker:JitterRatio must be between zero and one.")
+        .Validate(options => options.ClaimTimeout > TimeSpan.Zero,
+            "WebhookWorker:ClaimTimeout must be greater than zero.")
+        .Validate(options => options.RequestTimeout > TimeSpan.Zero,
+            "WebhookWorker:RequestTimeout must be greater than zero.")
+        .Validate(options => options.ClaimTimeout > options.RequestTimeout,
+            "WebhookWorker:ClaimTimeout must be greater than RequestTimeout.")
         .ValidateOnStart();
     builder.Services.AddSingleton<IWebhookRetryJitter, RandomWebhookRetryJitter>();
     builder.Services.AddSingleton<IWebhookSecretProtector, DataProtectionWebhookSecretProtector>();
@@ -100,7 +107,10 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddScoped<WebhookEndpointDisabler>();
     builder.Services.AddScoped<DeliveryWebhookOutbox>();
     builder.Services.AddScoped<WebhookQueue>();
-    builder.Services.AddHttpClient<WebhookDispatcher>()
+    builder.Services.AddHttpClient<WebhookDispatcher>((serviceProvider, client) =>
+        client.Timeout = serviceProvider
+            .GetRequiredService<IOptions<WebhookWorkerOptions>>()
+            .Value.RequestTimeout)
         .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
             AllowAutoRedirect = false,

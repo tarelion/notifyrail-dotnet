@@ -316,6 +316,99 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task ClaimDueAsync_RecoversClaimAfterConfiguredTimeout()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync("http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var firstClaimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var options = Options.Create(new WebhookWorkerOptions
+        {
+            WorkerId = "stale-claim-worker",
+            ClaimTimeout = TimeSpan.FromSeconds(30),
+            RequestTimeout = TimeSpan.FromSeconds(10),
+        });
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = new WebhookQueue(
+            scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            options,
+            new FixedWebhookRetryJitter(0.5));
+
+        var firstJob = Assert.Single(await queue.ClaimDueAsync(
+            "worker-a",
+            1,
+            firstClaimTime,
+            CancellationToken.None));
+        Assert.Empty(await queue.ClaimDueAsync(
+            "worker-b",
+            1,
+            firstClaimTime.AddSeconds(29),
+            CancellationToken.None));
+
+        var recoveredJob = Assert.Single(await queue.ClaimDueAsync(
+            "worker-b",
+            1,
+            firstClaimTime.AddSeconds(30),
+            CancellationToken.None));
+
+        Assert.Equal(firstJob.Request.EventId, recoveredJob.Request.EventId);
+        Assert.Equal(firstJob.Request.Body, recoveredJob.Request.Body);
+        Assert.Equal(1, recoveredJob.Claim.AttemptNumber);
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_SkipsLockedStaleClaimAndClaimsUnrelatedDelivery()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync("http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId, ["+905551111111", "+905552222222"]);
+        await RecordAcceptedDeliveriesAsync(count: 2);
+        var firstClaimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var options = Options.Create(new WebhookWorkerOptions
+        {
+            WorkerId = "skip-locked-worker",
+            ClaimTimeout = TimeSpan.FromSeconds(30),
+            RequestTimeout = TimeSpan.FromSeconds(10),
+        });
+
+        await using var firstScope = _factory.Services.CreateAsyncScope();
+        var firstQueue = new WebhookQueue(
+            firstScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            options,
+            new FixedWebhookRetryJitter(0.5));
+        var staleJob = Assert.Single(await firstQueue.ClaimDueAsync(
+            "worker-a",
+            1,
+            firstClaimTime,
+            CancellationToken.None));
+
+        await using var lockScope = _factory.Services.CreateAsyncScope();
+        var lockContext = lockScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        await using var lockTransaction =
+            await lockContext.Database.BeginTransactionAsync(CancellationToken.None);
+        await lockContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT id FROM webhook_events WHERE id = {staleJob.Request.EventId} FOR UPDATE");
+
+        await using var claimScope = _factory.Services.CreateAsyncScope();
+        var claimContext = claimScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        claimContext.Database.SetCommandTimeout(TimeSpan.FromSeconds(1));
+        var queue = new WebhookQueue(
+            claimContext,
+            options,
+            new FixedWebhookRetryJitter(0.5));
+
+        var claimed = Assert.Single(await queue.ClaimDueAsync(
+            "worker-b",
+            1,
+            firstClaimTime.AddSeconds(30),
+            CancellationToken.None));
+
+        Assert.NotEqual(staleJob.Request.EventId, claimed.Request.EventId);
+    }
+
+    [Fact]
     public async Task ProcessBatchAsync_SchedulesTimeoutAndRecordsNormalizedAttempt()
     {
         await ResetDatabaseAsync();
@@ -370,6 +463,39 @@ public sealed class WebhookWorkerIntegrationTests
 
         Assert.Contains(
             "MaximumRetryDelay must not be less than BaseRetryDelay",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Startup_RejectsNonPositiveClaimTimeout()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("WebhookWorker:ClaimTimeout", "00:00:00");
+        });
+
+        var exception = Assert.Throws<OptionsValidationException>(factory.CreateClient);
+
+        Assert.Contains(
+            "ClaimTimeout must be greater than zero",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Startup_RejectsClaimTimeoutNotLongerThanRequestTimeout()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("WebhookWorker:RequestTimeout", "00:00:02");
+            builder.UseSetting("WebhookWorker:ClaimTimeout", "00:00:01");
+        });
+
+        var exception = Assert.Throws<OptionsValidationException>(factory.CreateClient);
+
+        Assert.Contains(
+            "ClaimTimeout must be greater than RequestTimeout",
             exception.Message,
             StringComparison.Ordinal);
     }
@@ -460,6 +586,191 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.Equal(2, received.Count);
         Assert.NotEqual(received[0].Timestamp, received[1].Timestamp);
         Assert.True(long.Parse(received[1].Timestamp) > long.Parse(received[0].Timestamp));
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_ConcurrentWorkersClaimDifferentDeliveriesOnce()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync("http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId, ["+905551111111", "+905552222222"]);
+        await RecordAcceptedDeliveriesAsync(count: 2);
+        var claimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var firstScope = _factory.Services.CreateAsyncScope();
+        await using var secondScope = _factory.Services.CreateAsyncScope();
+        var firstQueue = firstScope.ServiceProvider.GetRequiredService<WebhookQueue>();
+        var secondQueue = secondScope.ServiceProvider.GetRequiredService<WebhookQueue>();
+
+        var claims = await Task.WhenAll(
+            firstQueue.ClaimDueAsync("concurrent-worker-a", 1, claimTime, CancellationToken.None),
+            secondQueue.ClaimDueAsync("concurrent-worker-b", 1, claimTime, CancellationToken.None));
+
+        var jobs = claims.SelectMany(batch => batch).ToArray();
+        Assert.Equal(2, jobs.Length);
+        Assert.Equal(2, jobs.Select(job => job.Request.EventId).Distinct().Count());
+        Assert.Equal(2, jobs.Select(job => job.Claim.WorkerId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_ConcurrentWorkersSendSingleEventOnce()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromMilliseconds(250));
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var dispatchAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var firstScope = _factory.Services.CreateAsyncScope();
+        await using var secondScope = _factory.Services.CreateAsyncScope();
+        var firstWorker = new WebhookWorker(
+            firstScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            firstScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "concurrent-worker-a" }),
+            TimeProvider.System);
+        var secondWorker = new WebhookWorker(
+            secondScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            secondScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "concurrent-worker-b" }),
+            TimeProvider.System);
+
+        var processed = await Task.WhenAll(
+            firstWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None),
+            secondWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None));
+
+        Assert.Equal(1, processed.Sum());
+        Assert.Equal(1, receiver.ReceivedCount);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_ConcurrentWorkersSendDifferentDeliveriesInParallel()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromMilliseconds(500));
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId, ["+905551111111", "+905552222222"]);
+        await RecordAcceptedDeliveriesAsync(count: 2);
+        var dispatchAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var firstScope = _factory.Services.CreateAsyncScope();
+        await using var secondScope = _factory.Services.CreateAsyncScope();
+        var firstWorker = new WebhookWorker(
+            firstScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            firstScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "parallel-worker-a" }),
+            TimeProvider.System);
+        var secondWorker = new WebhookWorker(
+            secondScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            secondScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "parallel-worker-b" }),
+            TimeProvider.System);
+
+        var processed = await Task.WhenAll(
+            firstWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None),
+            secondWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None));
+
+        Assert.Equal(2, processed.Sum());
+        Assert.Equal(2, receiver.ReceivedCount);
+        Assert.Equal(2, receiver.MaximumConcurrentRequests);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_CommitsClaimBeforeWaitingForReceiver()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromSeconds(1));
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+
+        await using var workerScope = _factory.Services.CreateAsyncScope();
+        var worker = workerScope.ServiceProvider.GetRequiredService<WebhookWorker>();
+        var processing = worker.ProcessBatchAsync(
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None);
+        var received = await receiver.Received.WaitAsync(TimeSpan.FromSeconds(3));
+
+        await using var lockScope = _factory.Services.CreateAsyncScope();
+        var lockContext = lockScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        await using (var transaction =
+            await lockContext.Database.BeginTransactionAsync(CancellationToken.None))
+        {
+            await lockContext.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT id FROM webhook_events WHERE id = {Guid.Parse(received.EventId)} FOR UPDATE NOWAIT");
+        }
+
+        Assert.Equal(1, await processing);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_RetriesAmbiguousResponseWithSameLogicalEvent()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromMilliseconds(250));
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var firstAttemptedAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var firstCompletedAt = firstAttemptedAt.AddMilliseconds(50);
+        var options = Options.Create(new WebhookWorkerOptions
+        {
+            WorkerId = "ambiguous-response-worker",
+            BaseRetryDelay = TimeSpan.FromSeconds(1),
+            MinimumRetryDelay = TimeSpan.FromSeconds(1),
+            MaximumRetryDelay = TimeSpan.FromSeconds(1),
+            JitterRatio = 0,
+        });
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        using var timeoutClient = new HttpClient(new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+        })
+        {
+            Timeout = TimeSpan.FromMilliseconds(50),
+        };
+        var queue = new WebhookQueue(
+            scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            options,
+            new FixedWebhookRetryJitter(0.5));
+        var firstWorker = new WebhookWorker(
+            queue,
+            new WebhookDispatcher(
+                timeoutClient,
+                scope.ServiceProvider.GetRequiredService<IWebhookSecretProtector>()),
+            options,
+            new SequenceTimeProvider(firstAttemptedAt, firstCompletedAt));
+
+        Assert.Equal(1, await firstWorker.ProcessBatchAsync(
+            firstAttemptedAt,
+            CancellationToken.None));
+        var retryAt = Assert.IsType<DateTimeOffset>((await LoadWebhookEventStateAsync()).NextAttemptAt);
+        var secondWorker = new WebhookWorker(
+            queue,
+            scope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            options,
+            new SequenceTimeProvider(retryAt, retryAt.AddMilliseconds(250)));
+
+        Assert.Equal(1, await secondWorker.ProcessBatchAsync(retryAt, CancellationToken.None));
+
+        var received = await receiver.WaitForCountAsync(2);
+        var state = await LoadAmbiguousDispatchStateAsync();
+        Assert.Equal(received[0].EventId, received[1].EventId);
+        Assert.Equal(received[0].Body, received[1].Body);
+        Assert.Equal(1, state.EventCount);
+        Assert.Equal(2, state.AttemptCount);
+        Assert.Equal("retryable_failure", state.FirstOutcome);
+        Assert.Equal("succeeded", state.SecondOutcome);
+        Assert.Equal("succeeded", state.EventStatus);
     }
 
     private async Task<(Guid ApiClientId, string Secret)> CreateApiClientWithEndpointAsync(
@@ -580,6 +891,23 @@ public sealed class WebhookWorkerIntegrationTests
             """).SingleAsync(CancellationToken.None);
     }
 
+    private async Task<AmbiguousDispatchState> LoadAmbiguousDispatchStateAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        return await dbContext.Database.SqlQueryRaw<AmbiguousDispatchState>(
+            """
+            SELECT
+                (SELECT count(*)::int FROM webhook_events) AS "EventCount",
+                (SELECT count(*)::int FROM webhook_attempts) AS "AttemptCount",
+                (SELECT outcome FROM webhook_attempts ORDER BY attempt_number LIMIT 1)
+                    AS "FirstOutcome",
+                (SELECT outcome FROM webhook_attempts ORDER BY attempt_number OFFSET 1 LIMIT 1)
+                    AS "SecondOutcome",
+                (SELECT status FROM webhook_events) AS "EventStatus"
+            """).SingleAsync(CancellationToken.None);
+    }
+
     private static string Sign(string secret, string timestamp, string body)
     {
         var content = Encoding.UTF8.GetBytes($"{timestamp}.{body}");
@@ -613,6 +941,15 @@ public sealed class WebhookWorkerIntegrationTests
         public DateTimeOffset? NextAttemptAt { get; init; }
     }
 
+    private sealed class AmbiguousDispatchState
+    {
+        public int EventCount { get; init; }
+        public int AttemptCount { get; init; }
+        public string FirstOutcome { get; init; } = null!;
+        public string SecondOutcome { get; init; } = null!;
+        public string EventStatus { get; init; } = null!;
+    }
+
     private static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value)
     {
         return value.AddTicks(-(value.Ticks % 10));
@@ -622,21 +959,26 @@ public sealed class WebhookWorkerIntegrationTests
     {
         private readonly WebApplication _application;
         private readonly ConcurrentQueue<ReceivedWebhook> _receivedWebhooks;
+        private readonly RequestConcurrency _requestConcurrency;
 
         private TestWebhookReceiver(
             WebApplication application,
             string url,
             Task<ReceivedWebhook> received,
-            ConcurrentQueue<ReceivedWebhook> receivedWebhooks)
+            ConcurrentQueue<ReceivedWebhook> receivedWebhooks,
+            RequestConcurrency requestConcurrency)
         {
             _application = application;
             Url = url;
             Received = received;
             _receivedWebhooks = receivedWebhooks;
+            _requestConcurrency = requestConcurrency;
         }
 
         public string Url { get; }
         public Task<ReceivedWebhook> Received { get; }
+        public int ReceivedCount => _receivedWebhooks.Count;
+        public int MaximumConcurrentRequests => _requestConcurrency.Maximum;
 
         public async Task<IReadOnlyList<ReceivedWebhook>> WaitForCountAsync(int count)
         {
@@ -658,32 +1000,41 @@ public sealed class WebhookWorkerIntegrationTests
             var received = new TaskCompletionSource<ReceivedWebhook>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var receivedWebhooks = new ConcurrentQueue<ReceivedWebhook>();
+            var requestConcurrency = new RequestConcurrency();
             var builder = WebApplication.CreateSlimBuilder();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
             var application = builder.Build();
             application.MapPost("/webhooks", async context =>
             {
-                using var reader = new StreamReader(context.Request.Body, Encoding.UTF8);
-                var body = await reader.ReadToEndAsync(context.RequestAborted);
-                var webhook = new ReceivedWebhook(
-                    context.Request.Headers["X-NotifyRail-Event-Id"].ToString(),
-                    context.Request.Headers["X-NotifyRail-Timestamp"].ToString(),
-                    context.Request.Headers["X-NotifyRail-Signature"].ToString(),
-                    body);
-                receivedWebhooks.Enqueue(webhook);
-                received.TrySetResult(webhook);
-                if (responseDelay is { } delay)
+                requestConcurrency.Enter();
+                try
                 {
-                    await Task.Delay(delay, context.RequestAborted);
+                    using var reader = new StreamReader(context.Request.Body, Encoding.UTF8);
+                    var body = await reader.ReadToEndAsync(context.RequestAborted);
+                    var webhook = new ReceivedWebhook(
+                        context.Request.Headers["X-NotifyRail-Event-Id"].ToString(),
+                        context.Request.Headers["X-NotifyRail-Timestamp"].ToString(),
+                        context.Request.Headers["X-NotifyRail-Signature"].ToString(),
+                        body);
+                    receivedWebhooks.Enqueue(webhook);
+                    received.TrySetResult(webhook);
+                    if (responseDelay is { } delay)
+                    {
+                        await Task.Delay(delay, context.RequestAborted);
+                    }
+                    context.Response.StatusCode = (int)statusCode;
+                    if (retryAfter is not null)
+                    {
+                        context.Response.Headers.RetryAfter = retryAfter;
+                    }
+                    if (responseBody is not null)
+                    {
+                        await context.Response.WriteAsync(responseBody, context.RequestAborted);
+                    }
                 }
-                context.Response.StatusCode = (int)statusCode;
-                if (retryAfter is not null)
+                finally
                 {
-                    context.Response.Headers.RetryAfter = retryAfter;
-                }
-                if (responseBody is not null)
-                {
-                    await context.Response.WriteAsync(responseBody, context.RequestAborted);
+                    requestConcurrency.Exit();
                 }
             });
             await application.StartAsync();
@@ -693,13 +1044,43 @@ public sealed class WebhookWorkerIntegrationTests
                 application,
                 $"{address}/webhooks",
                 received.Task,
-                receivedWebhooks);
+                receivedWebhooks,
+                requestConcurrency);
         }
 
         public async ValueTask DisposeAsync()
         {
             await _application.StopAsync();
             await _application.DisposeAsync();
+        }
+    }
+
+    private sealed class RequestConcurrency
+    {
+        private int _active;
+        private int _maximum;
+
+        public int Maximum => Volatile.Read(ref _maximum);
+
+        public void Enter()
+        {
+            var active = Interlocked.Increment(ref _active);
+            var maximum = Volatile.Read(ref _maximum);
+            while (active > maximum)
+            {
+                var observed = Interlocked.CompareExchange(ref _maximum, active, maximum);
+                if (observed == maximum)
+                {
+                    break;
+                }
+
+                maximum = observed;
+            }
+        }
+
+        public void Exit()
+        {
+            Interlocked.Decrement(ref _active);
         }
     }
 
