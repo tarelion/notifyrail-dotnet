@@ -9,26 +9,28 @@ public sealed class WebhookEvent
     {
     }
 
-    public static WebhookEvent CreateDeliverySent(
+    public static WebhookEvent CreateDeliveryStateChanged(
         Guid apiClientId,
         Guid webhookEndpointId,
         Guid messageId,
         Guid deliveryId,
         string recipient,
+        string status,
         int sequence,
         DateTimeOffset occurredAt)
     {
+        var type = $"delivery.{status}";
         var id = Guid.NewGuid();
         var payload = JsonSerializer.Serialize(new WebhookEventEnvelope(
             id,
-            "delivery.sent",
+            type,
             1,
             occurredAt,
             new WebhookEventData(
                 messageId,
                 deliveryId,
                 sequence,
-                "sent",
+                status,
                 recipient)));
 
         return new WebhookEvent
@@ -38,7 +40,7 @@ public sealed class WebhookEvent
             WebhookEndpointId = webhookEndpointId,
             MessageId = messageId,
             DeliveryId = deliveryId,
-            Type = "delivery.sent",
+            Type = type,
             Version = 1,
             Sequence = sequence,
             OccurredAt = occurredAt,

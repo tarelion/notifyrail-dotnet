@@ -37,9 +37,16 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
             $"""
             WITH due AS (
                 SELECT id
-                FROM webhook_events
-                WHERE status = 'pending'
-                ORDER BY created_at, id
+                FROM webhook_events AS candidate
+                WHERE candidate.status = 'pending'
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM webhook_events AS earlier
+                        WHERE earlier.delivery_id = candidate.delivery_id
+                            AND earlier.sequence < candidate.sequence
+                            AND earlier.status IN ('pending', 'processing')
+                    )
+                ORDER BY candidate.created_at, candidate.id
                 FOR UPDATE SKIP LOCKED
                 LIMIT {limit}
             ), claimed AS (
