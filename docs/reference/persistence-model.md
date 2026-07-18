@@ -13,8 +13,9 @@ agent-readable contract.
 - DbContext: `src/NotifyRail.Api/Infrastructure/Persistence/NotifyRailDbContext.cs`
 - Entity mappings: `ApiClientConfiguration`, `ApiKeyConfiguration`,
   `WebhookEndpointConfiguration`, `WebhookSecretConfiguration`,
-  `WebhookEventConfiguration`, `MessageConfiguration`, `DeliveryConfiguration`,
-  `DeliveryAttemptConfiguration`, and `OtpChallengeConfiguration`
+  `WebhookEventConfiguration`, `WebhookAttemptConfiguration`,
+  `MessageConfiguration`, `DeliveryConfiguration`, `DeliveryAttemptConfiguration`,
+  and `OtpChallengeConfiguration`
 - Migrations: `src/NotifyRail.Api/Infrastructure/Persistence/Migrations`
 
 ## Relationships
@@ -28,6 +29,8 @@ agent-readable contract.
 - Each delivery references one message through `deliveries.message_id`.
 - Each delivery attempt references one delivery through
   `delivery_attempts.delivery_id`.
+- Each Webhook Attempt references one Webhook Event through
+  `webhook_attempts.webhook_event_id`.
 - Each OTP challenge references one Message through
   `otp_challenges.message_id` and inherits that Message's API Client ownership.
 - All foreign keys use `NO ACTION` deletion behavior; deleting a parent does
@@ -142,6 +145,24 @@ Management API reads expose no plaintext or recoverable display value.
 `(delivery_id, sequence)` is unique. The due-work index on
 `(status, created_at)` supports the dedicated Webhook Queue. The payload is
 stored as text so the bytes signed by NotifyRail are the bytes sent over HTTP.
+
+## `webhook_attempts`
+
+| Column | PostgreSQL type | Required | Contract |
+| --- | --- | --- | --- |
+| `id` | `uuid` | yes | Primary key; defaults to `gen_random_uuid()`. |
+| `webhook_event_id` | `uuid` | yes | Webhook Event dispatched by this attempt. |
+| `attempt_number` | `integer` | yes | Positive, one-based attempt number within the event. |
+| `outcome` | `text` | yes | `succeeded` or `failed`. |
+| `http_status_code` | `integer` | no | HTTP status between 100 and 599 when a response exists. |
+| `error_code` | `text` | no | Normalized diagnostic bounded to 100 characters. |
+| `error_message` | `text` | no | Diagnostic bounded to 500 characters; response bodies are excluded. |
+| `attempted_at` | `timestamp with time zone` | yes | Claim and request timestamp. |
+| `completed_at` | `timestamp with time zone` | yes | Result-recording timestamp, not earlier than `attempted_at`. |
+| `latency_milliseconds` | `bigint` | yes | Non-negative measured HTTP latency. |
+
+`(webhook_event_id, attempt_number)` is unique. Attempt insertion and Webhook
+Event status update occur in one transaction after the HTTP request completes.
 
 ## `messages`
 

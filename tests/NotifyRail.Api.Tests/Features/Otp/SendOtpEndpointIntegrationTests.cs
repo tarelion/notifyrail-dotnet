@@ -272,6 +272,6 @@ public sealed class SendOtpEndpointIntegrationTests
 
         await dbContext.Database.MigrateAsync();
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE webhook_events, otp_challenges, delivery_attempts, deliveries, messages;");
+            "TRUNCATE webhook_attempts, webhook_events, otp_challenges, delivery_attempts, deliveries, messages;");
     }
 }

@@ -23,9 +23,12 @@ using NotifyRail.Api.Features.Otp.SendOtp;
 using NotifyRail.Api.Features.Otp.VerifyOtp;
 using NotifyRail.Api.Features.Webhooks;
 using NotifyRail.Api.Features.Webhooks.DisableWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.Dispatch;
 using NotifyRail.Api.Features.Webhooks.InspectWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
 using NotifyRail.Api.Features.Webhooks.Secrets;
+using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -77,11 +80,20 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.Configure<WebhookOptions>(
         builder.Configuration.GetSection(WebhookOptions.SectionName));
+    builder.Services.Configure<WebhookWorkerOptions>(
+        builder.Configuration.GetSection(WebhookWorkerOptions.SectionName));
     builder.Services.AddSingleton<IWebhookSecretProtector, DataProtectionWebhookSecretProtector>();
     builder.Services.AddSingleton<WebhookEndpointUrlValidator>();
     builder.Services.AddScoped<WebhookEndpointRegistrar>();
     builder.Services.AddScoped<WebhookEndpointReader>();
     builder.Services.AddScoped<WebhookEndpointDisabler>();
+    builder.Services.AddScoped<WebhookQueue>();
+    builder.Services.AddHttpClient<WebhookDispatcher>()
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+        });
+    builder.Services.AddScoped<WebhookWorker>();
     builder.Services.AddScoped<ApiClientCreator>();
     builder.Services.AddScoped<ApiKeyCreator>();
     builder.Services.AddScoped<ApiClientDisabler>();
@@ -94,6 +106,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddScoped<MockProviderCallbackHandler>();
     builder.Services.AddSingleton<IProviderCallbackVerifier, MockProviderCallbackVerifier>();
     builder.Services.AddHostedService<DeliveryWorkerBackgroundService>();
+    builder.Services.AddHostedService<WebhookWorkerBackgroundService>();
     builder.Services.AddScoped<MessageIntake>();
     builder.Services.AddScoped<MessageSummaryReader>();
     builder.Services.AddScoped<MessageDeliveryReader>();

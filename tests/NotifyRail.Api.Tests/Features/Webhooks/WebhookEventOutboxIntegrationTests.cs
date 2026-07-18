@@ -188,7 +188,7 @@ public sealed class WebhookEventOutboxIntegrationTests
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
         await dbContext.Database.MigrateAsync(CancellationToken.None);
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE webhook_secrets, webhook_endpoints, otp_challenges, " +
+            "TRUNCATE webhook_attempts, webhook_events, webhook_secrets, webhook_endpoints, otp_challenges, " +
             "delivery_attempts, deliveries, messages, api_keys, api_clients CASCADE;",
             CancellationToken.None);
     }

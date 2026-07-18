@@ -3,8 +3,8 @@
 ## Purpose
 
 This page defines the implemented background delivery-processing contract for
-NotifyRail: how due deliveries are claimed, how provider adapters are called,
-how the mock provider behaves, and how provider outcomes are recorded.
+NotifyRail: how due deliveries and Webhook Events are claimed, how provider and
+Webhook Endpoint adapters are called, and how their outcomes are recorded.
 
 ## Scope
 
@@ -14,6 +14,10 @@ how the mock provider behaves, and how provider outcomes are recorded.
 - Provider contract: `src/NotifyRail.Api/Features/Deliveries/Providers`
 - Provider callback module:
   `src/NotifyRail.Api/Features/Deliveries/ProviderCallbacks/Mock`
+- Webhook queue, dispatch, and worker modules:
+  `src/NotifyRail.Api/Features/Webhooks/Queue`,
+  `src/NotifyRail.Api/Features/Webhooks/Dispatch`, and
+  `src/NotifyRail.Api/Features/Webhooks/Worker`
 - Delivery persistence: `src/NotifyRail.Api/Features/Deliveries/Persistence`
 - EF Core migrations:
   `src/NotifyRail.Api/Infrastructure/Persistence/Migrations`
@@ -23,7 +27,8 @@ how the mock provider behaves, and how provider outcomes are recorded.
 `Program.cs` starts one ASP.NET Core process containing both:
 
 - the HTTP API server
-- a hosted delivery worker
+- a hosted Delivery Worker
+- a separate hosted Webhook Worker
 
 Both components use the configured `ConnectionStrings:Postgres`. The hosted
 worker opens a DI scope for each batch so scoped dependencies such as
@@ -38,6 +43,9 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `DeliveryWorker:BatchSize` | configuration / `DeliveryWorkerOptions.BatchSize` | `1` | `0` uses the default; negative values are invalid. |
 | `DeliveryWorker:PollInterval` | configuration / `DeliveryWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
 | `DeliveryQueue:BaseRetryDelay` | configuration / `DeliveryQueueOptions.BaseRetryDelay` | `1m` | Positive base retry delay. Attempt `N` waits `N * BaseRetryDelay`. |
+| `WebhookWorker:WorkerId` | configuration / `WebhookWorkerOptions.WorkerId` | `notifyrail-webhook-<guid>` | Trimmed non-empty identity independent from the Delivery Worker. |
+| `WebhookWorker:BatchSize` | configuration / `WebhookWorkerOptions.BatchSize` | `1` | `0` uses the default; negative values are invalid. |
+| `WebhookWorker:PollInterval` | configuration / `WebhookWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 | `MockProviderCallback:Secret` | configuration / `MockProviderCallbackOptions.Secret` | none | Required provider-specific HMAC secret for authenticating mock Provider Callbacks. It is separate from API Keys, Operator Credentials, and Webhook Secrets. |
 | `MockProviderCallback:SignatureTolerance` | configuration / `MockProviderCallbackOptions.SignatureTolerance` | `00:05:00` | Maximum accepted clock difference in either direction for mock Provider Callback signatures. |
@@ -278,6 +286,38 @@ Outcome-specific delivery transitions:
 | `RetryableFailure` with attempts remaining | `retry_scheduled` | `attempted_at + attempt_number * DeliveryQueue:BaseRetryDelay` | `NULL` |
 | `RetryableFailure` on max attempt | `failed` | `NULL` | `NULL` |
 | `PermanentFailure` | `failed` | `NULL` | `NULL` |
+
+## Webhook Dispatch
+
+An accepted provider result creates one pending `delivery.sent` Webhook Event
+inside the provider-result transaction when the Message owner has an active
+Webhook Endpoint. `WebhookWorkerBackgroundService` polls this work independently
+from `DeliveryWorkerBackgroundService`.
+
+`WebhookQueue.ClaimDueAsync` recovers five-minute stale claims, then claims
+pending events through `FOR UPDATE SKIP LOCKED`. The claim transaction commits
+before any HTTP request is made. Each request is a `POST` whose body is the
+exact JSON text persisted on the Webhook Event. Redirect following is disabled.
+
+The outbound headers are:
+
+| Header | Value |
+| --- | --- |
+| `X-NotifyRail-Event-Id` | Stable Webhook Event UUID. |
+| `X-NotifyRail-Timestamp` | Unix timestamp in seconds. |
+| `X-NotifyRail-Signature` | `v1=<lowercase hex HMAC-SHA256>`. |
+
+The v1 signature input is the UTF-8 encoding of
+`<timestamp>.<exact_body>`. The HMAC key is the owning API Client's unprotected
+Webhook Secret. Any HTTP 2xx response marks the event `succeeded`; another
+status or a network failure marks this initial tracer-bullet event `failed`.
+Reliable retry and dead-event behavior is intentionally delivered by later v2
+slices.
+
+Every request records one Webhook Attempt. Attempts retain status code, timing,
+latency, normalized outcome, and error diagnostics bounded to 100 characters
+for codes and 500 characters for messages. Response bodies are not persisted.
+Webhook dispatch state never changes Delivery status.
 
 The canonical table, relationship, constraint, and index definitions are in
 the [persistence model reference](persistence-model.md).

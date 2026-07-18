@@ -183,6 +183,6 @@ public sealed class GetMessageDeliveriesEndpointIntegrationTests
         var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
 
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE webhook_events, otp_challenges, delivery_attempts, deliveries, messages;");
+            "TRUNCATE webhook_attempts, webhook_events, otp_challenges, delivery_attempts, deliveries, messages;");
     }
 }
