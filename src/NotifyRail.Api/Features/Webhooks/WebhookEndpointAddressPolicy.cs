@@ -8,6 +8,48 @@ public sealed class WebhookEndpointAddressPolicy(
     IWebhookDnsResolver dnsResolver,
     IOptions<WebhookOptions> options)
 {
+    // Conservative public-address policy derived from the IANA IPv4 and IPv6
+    // Special-Purpose Address Registries, last verified 2026-07-18.
+    private static readonly IPNetwork[] NonPublicIpv4Networks =
+    [
+        IPNetwork.Parse("0.0.0.0/8"),
+        IPNetwork.Parse("10.0.0.0/8"),
+        IPNetwork.Parse("100.64.0.0/10"),
+        IPNetwork.Parse("127.0.0.0/8"),
+        IPNetwork.Parse("169.254.0.0/16"),
+        IPNetwork.Parse("172.16.0.0/12"),
+        IPNetwork.Parse("192.0.0.0/24"),
+        IPNetwork.Parse("192.0.2.0/24"),
+        IPNetwork.Parse("192.88.99.0/24"),
+        IPNetwork.Parse("192.168.0.0/16"),
+        IPNetwork.Parse("198.18.0.0/15"),
+        IPNetwork.Parse("198.51.100.0/24"),
+        IPNetwork.Parse("203.0.113.0/24"),
+        IPNetwork.Parse("224.0.0.0/4"),
+        IPNetwork.Parse("240.0.0.0/4"),
+    ];
+
+    private static readonly IPNetwork GlobalIpv6UnicastNetwork =
+        IPNetwork.Parse("2000::/3");
+    private static readonly IPNetwork IetfIpv6ProtocolAssignments =
+        IPNetwork.Parse("2001::/23");
+    private static readonly IPNetwork[] GloballyReachableIetfIpv6Assignments =
+    [
+        IPNetwork.Parse("2001:1::1/128"),
+        IPNetwork.Parse("2001:1::2/128"),
+        IPNetwork.Parse("2001:1::3/128"),
+        IPNetwork.Parse("2001:3::/32"),
+        IPNetwork.Parse("2001:4:112::/48"),
+        IPNetwork.Parse("2001:20::/28"),
+        IPNetwork.Parse("2001:30::/28"),
+    ];
+    private static readonly IPNetwork[] NonPublicIpv6GlobalUnicastNetworks =
+    [
+        IPNetwork.Parse("2001:db8::/32"),
+        IPNetwork.Parse("2002::/16"),
+        IPNetwork.Parse("3fff::/20"),
+    ];
+
     public async ValueTask<bool> IsAllowedAsync(
         string host,
         CancellationToken cancellationToken)
@@ -28,13 +70,9 @@ public sealed class WebhookEndpointAddressPolicy(
         string host,
         CancellationToken cancellationToken)
     {
-        var normalizedHost = host.TrimEnd('.');
-        var isLocalhostName = string.Equals(
-            normalizedHost,
-            "localhost",
-            StringComparison.OrdinalIgnoreCase);
-        var isLoopbackLiteral = IPAddress.TryParse(normalizedHost, out var parsedAddress) &&
-            IsLoopback(parsedAddress);
+        var normalizedHost = NormalizeHost(host);
+        var isLocalhostTarget = IsLocalhostTarget(normalizedHost);
+        IPAddress.TryParse(normalizedHost, out var parsedAddress);
         IPAddress[] addresses;
         if (parsedAddress is not null)
         {
@@ -50,7 +88,7 @@ public sealed class WebhookEndpointAddressPolicy(
             throw new UnsafeWebhookEndpointException();
         }
 
-        if (isLocalhostName || isLoopbackLiteral)
+        if (isLocalhostTarget)
         {
             if (options.Value.AllowLocalhostEndpoints && addresses.All(IsLoopback))
             {
@@ -77,21 +115,7 @@ public sealed class WebhookEndpointAddressPolicy(
 
         if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
         {
-            var bytes = address.GetAddressBytes();
-            return !IsInIpv4Range(bytes, 0, 8) &&
-                !IsInIpv4Range(bytes, 10, 8) &&
-                !IsInIpv4Range(bytes, 100, 10, secondOctet: 64) &&
-                !IsInIpv4Range(bytes, 127, 8) &&
-                !IsInIpv4Range(bytes, 169, 16, secondOctet: 254) &&
-                !IsInIpv4Range(bytes, 172, 12, secondOctet: 16) &&
-                !IsInIpv4Range(bytes, 192, 24, secondOctet: 0, thirdOctet: 0) &&
-                !IsInIpv4Range(bytes, 192, 24, secondOctet: 0, thirdOctet: 2) &&
-                !IsInIpv4Range(bytes, 192, 16, secondOctet: 168) &&
-                !IsInIpv4Range(bytes, 198, 15, secondOctet: 18) &&
-                !IsInIpv4Range(bytes, 198, 24, secondOctet: 51, thirdOctet: 100) &&
-                !IsInIpv4Range(bytes, 203, 24, secondOctet: 0, thirdOctet: 113) &&
-                !IsInIpv4Range(bytes, 224, 4) &&
-                !IsInIpv4Range(bytes, 240, 4);
+            return !NonPublicIpv4Networks.Any(network => network.Contains(address));
         }
 
         if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6)
@@ -99,14 +123,26 @@ public sealed class WebhookEndpointAddressPolicy(
             return false;
         }
 
-        return !address.Equals(IPAddress.IPv6Any) &&
-            !IPAddress.IsLoopback(address) &&
-            !address.IsIPv6LinkLocal &&
-            !address.IsIPv6Multicast &&
-            !address.IsIPv6SiteLocal &&
-            !address.IsIPv6UniqueLocal &&
-            !IsInIpv6Range(address, [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], 64) &&
-            !IsInIpv6Range(address, [0x20, 0x01, 0x0d, 0xb8], 32);
+        if (!GlobalIpv6UnicastNetwork.Contains(address))
+        {
+            return false;
+        }
+
+        if (IetfIpv6ProtocolAssignments.Contains(address))
+        {
+            return GloballyReachableIetfIpv6Assignments.Any(
+                network => network.Contains(address));
+        }
+
+        return !NonPublicIpv6GlobalUnicastNetworks.Any(
+            network => network.Contains(address));
+    }
+
+    public static bool IsLocalhostTarget(string host)
+    {
+        var normalizedHost = NormalizeHost(host);
+        return string.Equals(normalizedHost, "localhost", StringComparison.OrdinalIgnoreCase) ||
+            (IPAddress.TryParse(normalizedHost, out var address) && IsLoopback(address));
     }
 
     private static bool IsLoopback(IPAddress address)
@@ -121,45 +157,7 @@ public sealed class WebhookEndpointAddressPolicy(
                 address.GetAddressBytes()[0] == 127);
     }
 
-    private static bool IsInIpv4Range(
-        byte[] address,
-        byte firstOctet,
-        int prefixLength,
-        byte secondOctet = 0,
-        byte thirdOctet = 0)
-    {
-        var value = ((uint)address[0] << 24) |
-            ((uint)address[1] << 16) |
-            ((uint)address[2] << 8) |
-            address[3];
-        var network = ((uint)firstOctet << 24) |
-            ((uint)secondOctet << 16) |
-            ((uint)thirdOctet << 8);
-        var mask = uint.MaxValue << (32 - prefixLength);
-        return (value & mask) == (network & mask);
-    }
-
-    private static bool IsInIpv6Range(
-        IPAddress address,
-        ReadOnlySpan<byte> network,
-        int prefixLength)
-    {
-        var bytes = address.GetAddressBytes();
-        var wholeBytes = prefixLength / 8;
-        var remainingBits = prefixLength % 8;
-        if (!bytes.AsSpan(0, wholeBytes).SequenceEqual(network[..wholeBytes]))
-        {
-            return false;
-        }
-
-        if (remainingBits == 0)
-        {
-            return true;
-        }
-
-        var mask = (byte)(0xff << (8 - remainingBits));
-        return (bytes[wholeBytes] & mask) == (network[wholeBytes] & mask);
-    }
+    private static string NormalizeHost(string host) => host.TrimEnd('.');
 }
 
 internal sealed class UnsafeWebhookEndpointException : Exception;

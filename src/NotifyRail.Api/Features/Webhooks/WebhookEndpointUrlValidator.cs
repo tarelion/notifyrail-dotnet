@@ -1,4 +1,3 @@
-using System.Net;
 using Microsoft.Extensions.Options;
 
 namespace NotifyRail.Api.Features.Webhooks;
@@ -25,8 +24,7 @@ public sealed class WebhookEndpointUrlValidator(
         }
 
         var host = uri.IdnHost.TrimEnd('.');
-        var isLocalhost = string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
-            IsLoopbackAddress(host);
+        var isLocalhost = WebhookEndpointAddressPolicy.IsLocalhostTarget(host);
 
         if (uri.Scheme != Uri.UriSchemeHttps &&
             !(isLocalhost && options.Value.AllowLocalhostEndpoints))
@@ -48,17 +46,6 @@ public sealed class WebhookEndpointUrlValidator(
         }
 
         return WebhookEndpointUrlValidationResult.Valid(uri.AbsoluteUri);
-    }
-
-    private static bool IsLoopbackAddress(string host)
-    {
-        if (!IPAddress.TryParse(host, out var address))
-        {
-            return false;
-        }
-
-        return IPAddress.IsLoopback(
-            address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address);
     }
 }
 

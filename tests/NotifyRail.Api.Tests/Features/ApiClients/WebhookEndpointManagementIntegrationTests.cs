@@ -363,11 +363,20 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     [InlineData("https://169.254.169.254/latest/meta-data")]
     [InlineData("https://172.16.0.1/webhooks")]
     [InlineData("https://192.168.1.1/webhooks")]
+    [InlineData("https://192.88.99.2/webhooks")]
     [InlineData("https://224.0.0.1/webhooks")]
     [InlineData("https://[::]/webhooks")]
     [InlineData("https://[fc00::1]/webhooks")]
     [InlineData("https://[fe80::1]/webhooks")]
     [InlineData("https://[ff02::1]/webhooks")]
+    [InlineData("https://[::ffff:10.0.0.1]/webhooks")]
+    [InlineData("https://[64:ff9b:1::1]/webhooks")]
+    [InlineData("https://[2001:2::1]/webhooks")]
+    [InlineData("https://[2001:5::1]/webhooks")]
+    [InlineData("https://[2001:db8::1]/webhooks")]
+    [InlineData("https://[2002:a00:1::]/webhooks")]
+    [InlineData("https://[3fff::1]/webhooks")]
+    [InlineData("https://[5f00::1]/webhooks")]
     public async Task RegisterWebhookEndpoint_RejectsNonPublicAddress(string url)
     {
         await EnsureDatabaseReadyAsync();
