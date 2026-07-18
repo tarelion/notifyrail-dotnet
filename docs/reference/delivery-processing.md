@@ -50,7 +50,8 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `WebhookWorker:MinimumRetryDelay` | configuration / `WebhookWorkerOptions.MinimumRetryDelay` | `1s` | Positive lower safety bound for computed delays and valid `Retry-After` values. |
 | `WebhookWorker:MaximumRetryDelay` | configuration / `WebhookWorkerOptions.MaximumRetryDelay` | `1h` | Upper safety bound not less than the base delay. |
 | `WebhookWorker:JitterRatio` | configuration / `WebhookWorkerOptions.JitterRatio` | `0.2` | Random proportional offset in the inclusive range `0` to `1`; `0.2` gives a multiplier from `0.8` through `1.2`. |
-| `WebhookWorker:ClaimTimeout` | configuration / `WebhookWorkerOptions.ClaimTimeout` | `5m` | Positive lease duration after which an in-progress event is eligible for recovery. |
+| `WebhookWorker:RequestTimeout` | configuration / `WebhookWorkerOptions.RequestTimeout` | `100s` | Positive timeout applied to each outbound HTTP request. |
+| `WebhookWorker:ClaimTimeout` | configuration / `WebhookWorkerOptions.ClaimTimeout` | `5m` | Positive lease duration after which an in-progress event is eligible for recovery; it must be greater than `RequestTimeout`. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 | `MockProviderCallback:Secret` | configuration / `MockProviderCallbackOptions.Secret` | none | Required provider-specific HMAC secret for authenticating mock Provider Callbacks. It is separate from API Keys, Operator Credentials, and Webhook Secrets. |
 | `MockProviderCallback:SignatureTolerance` | configuration / `MockProviderCallbackOptions.SignatureTolerance` | `00:05:00` | Maximum accepted clock difference in either direction for mock Provider Callback signatures. |
@@ -311,6 +312,8 @@ for the same Delivery has not reached a terminal dispatch state. Unrelated
 Deliveries can still be claimed in the same batch or by another worker. The
 claim transaction commits before any HTTP request is made. Each request is a
 `POST` whose body is the exact JSON text persisted on the Webhook Event.
+The claim lease must exceed the outbound request timeout so a live request
+cannot become eligible for concurrent recovery.
 Redirect following is disabled. The worker claims one event immediately before
 each send, up to the configured batch limit, so later batch items do not consume
 their claim lease while an earlier endpoint is responding.

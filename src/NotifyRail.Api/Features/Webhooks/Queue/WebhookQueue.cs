@@ -43,6 +43,15 @@ public sealed class WebhookQueue
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Claim timeout must be positive.");
         }
+        if (value.RequestTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Request timeout must be positive.");
+        }
+        if (value.ClaimTimeout <= value.RequestTimeout)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), "Claim timeout must be greater than the request timeout.");
+        }
 
         _dbContext = dbContext;
         _jitter = jitter;

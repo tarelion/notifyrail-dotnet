@@ -327,6 +327,7 @@ public sealed class WebhookWorkerIntegrationTests
         {
             WorkerId = "stale-claim-worker",
             ClaimTimeout = TimeSpan.FromSeconds(30),
+            RequestTimeout = TimeSpan.FromSeconds(10),
         });
 
         await using var scope = _factory.Services.CreateAsyncScope();
@@ -369,6 +370,7 @@ public sealed class WebhookWorkerIntegrationTests
         {
             WorkerId = "skip-locked-worker",
             ClaimTimeout = TimeSpan.FromSeconds(30),
+            RequestTimeout = TimeSpan.FromSeconds(10),
         });
 
         await using var firstScope = _factory.Services.CreateAsyncScope();
@@ -477,6 +479,23 @@ public sealed class WebhookWorkerIntegrationTests
 
         Assert.Contains(
             "ClaimTimeout must be greater than zero",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Startup_RejectsClaimTimeoutNotLongerThanRequestTimeout()
+    {
+        using var factory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("WebhookWorker:RequestTimeout", "00:00:02");
+            builder.UseSetting("WebhookWorker:ClaimTimeout", "00:00:01");
+        });
+
+        var exception = Assert.Throws<OptionsValidationException>(factory.CreateClient);
+
+        Assert.Contains(
+            "ClaimTimeout must be greater than RequestTimeout",
             exception.Message,
             StringComparison.Ordinal);
     }
@@ -591,6 +610,73 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.Equal(2, jobs.Length);
         Assert.Equal(2, jobs.Select(job => job.Request.EventId).Distinct().Count());
         Assert.Equal(2, jobs.Select(job => job.Claim.WorkerId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_ConcurrentWorkersSendSingleEventOnce()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromMilliseconds(250));
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var dispatchAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var firstScope = _factory.Services.CreateAsyncScope();
+        await using var secondScope = _factory.Services.CreateAsyncScope();
+        var firstWorker = new WebhookWorker(
+            firstScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            firstScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "concurrent-worker-a" }),
+            TimeProvider.System);
+        var secondWorker = new WebhookWorker(
+            secondScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            secondScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "concurrent-worker-b" }),
+            TimeProvider.System);
+
+        var processed = await Task.WhenAll(
+            firstWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None),
+            secondWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None));
+
+        Assert.Equal(1, processed.Sum());
+        Assert.Equal(1, receiver.ReceivedCount);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_ConcurrentWorkersSendDifferentDeliveriesInParallel()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromMilliseconds(500));
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId, ["+905551111111", "+905552222222"]);
+        await RecordAcceptedDeliveriesAsync(count: 2);
+        var dispatchAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var firstScope = _factory.Services.CreateAsyncScope();
+        await using var secondScope = _factory.Services.CreateAsyncScope();
+        var firstWorker = new WebhookWorker(
+            firstScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            firstScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "parallel-worker-a" }),
+            TimeProvider.System);
+        var secondWorker = new WebhookWorker(
+            secondScope.ServiceProvider.GetRequiredService<WebhookQueue>(),
+            secondScope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            Options.Create(new WebhookWorkerOptions { WorkerId = "parallel-worker-b" }),
+            TimeProvider.System);
+
+        var processed = await Task.WhenAll(
+            firstWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None),
+            secondWorker.ProcessBatchAsync(dispatchAt, CancellationToken.None));
+
+        Assert.Equal(2, processed.Sum());
+        Assert.Equal(2, receiver.ReceivedCount);
+        Assert.Equal(2, receiver.MaximumConcurrentRequests);
     }
 
     [Fact]
@@ -873,21 +959,26 @@ public sealed class WebhookWorkerIntegrationTests
     {
         private readonly WebApplication _application;
         private readonly ConcurrentQueue<ReceivedWebhook> _receivedWebhooks;
+        private readonly RequestConcurrency _requestConcurrency;
 
         private TestWebhookReceiver(
             WebApplication application,
             string url,
             Task<ReceivedWebhook> received,
-            ConcurrentQueue<ReceivedWebhook> receivedWebhooks)
+            ConcurrentQueue<ReceivedWebhook> receivedWebhooks,
+            RequestConcurrency requestConcurrency)
         {
             _application = application;
             Url = url;
             Received = received;
             _receivedWebhooks = receivedWebhooks;
+            _requestConcurrency = requestConcurrency;
         }
 
         public string Url { get; }
         public Task<ReceivedWebhook> Received { get; }
+        public int ReceivedCount => _receivedWebhooks.Count;
+        public int MaximumConcurrentRequests => _requestConcurrency.Maximum;
 
         public async Task<IReadOnlyList<ReceivedWebhook>> WaitForCountAsync(int count)
         {
@@ -909,32 +1000,41 @@ public sealed class WebhookWorkerIntegrationTests
             var received = new TaskCompletionSource<ReceivedWebhook>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var receivedWebhooks = new ConcurrentQueue<ReceivedWebhook>();
+            var requestConcurrency = new RequestConcurrency();
             var builder = WebApplication.CreateSlimBuilder();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
             var application = builder.Build();
             application.MapPost("/webhooks", async context =>
             {
-                using var reader = new StreamReader(context.Request.Body, Encoding.UTF8);
-                var body = await reader.ReadToEndAsync(context.RequestAborted);
-                var webhook = new ReceivedWebhook(
-                    context.Request.Headers["X-NotifyRail-Event-Id"].ToString(),
-                    context.Request.Headers["X-NotifyRail-Timestamp"].ToString(),
-                    context.Request.Headers["X-NotifyRail-Signature"].ToString(),
-                    body);
-                receivedWebhooks.Enqueue(webhook);
-                received.TrySetResult(webhook);
-                if (responseDelay is { } delay)
+                requestConcurrency.Enter();
+                try
                 {
-                    await Task.Delay(delay, context.RequestAborted);
+                    using var reader = new StreamReader(context.Request.Body, Encoding.UTF8);
+                    var body = await reader.ReadToEndAsync(context.RequestAborted);
+                    var webhook = new ReceivedWebhook(
+                        context.Request.Headers["X-NotifyRail-Event-Id"].ToString(),
+                        context.Request.Headers["X-NotifyRail-Timestamp"].ToString(),
+                        context.Request.Headers["X-NotifyRail-Signature"].ToString(),
+                        body);
+                    receivedWebhooks.Enqueue(webhook);
+                    received.TrySetResult(webhook);
+                    if (responseDelay is { } delay)
+                    {
+                        await Task.Delay(delay, context.RequestAborted);
+                    }
+                    context.Response.StatusCode = (int)statusCode;
+                    if (retryAfter is not null)
+                    {
+                        context.Response.Headers.RetryAfter = retryAfter;
+                    }
+                    if (responseBody is not null)
+                    {
+                        await context.Response.WriteAsync(responseBody, context.RequestAborted);
+                    }
                 }
-                context.Response.StatusCode = (int)statusCode;
-                if (retryAfter is not null)
+                finally
                 {
-                    context.Response.Headers.RetryAfter = retryAfter;
-                }
-                if (responseBody is not null)
-                {
-                    await context.Response.WriteAsync(responseBody, context.RequestAborted);
+                    requestConcurrency.Exit();
                 }
             });
             await application.StartAsync();
@@ -944,13 +1044,43 @@ public sealed class WebhookWorkerIntegrationTests
                 application,
                 $"{address}/webhooks",
                 received.Task,
-                receivedWebhooks);
+                receivedWebhooks,
+                requestConcurrency);
         }
 
         public async ValueTask DisposeAsync()
         {
             await _application.StopAsync();
             await _application.DisposeAsync();
+        }
+    }
+
+    private sealed class RequestConcurrency
+    {
+        private int _active;
+        private int _maximum;
+
+        public int Maximum => Volatile.Read(ref _maximum);
+
+        public void Enter()
+        {
+            var active = Interlocked.Increment(ref _active);
+            var maximum = Volatile.Read(ref _maximum);
+            while (active > maximum)
+            {
+                var observed = Interlocked.CompareExchange(ref _maximum, active, maximum);
+                if (observed == maximum)
+                {
+                    break;
+                }
+
+                maximum = observed;
+            }
+        }
+
+        public void Exit()
+        {
+            Interlocked.Decrement(ref _active);
         }
     }
 
