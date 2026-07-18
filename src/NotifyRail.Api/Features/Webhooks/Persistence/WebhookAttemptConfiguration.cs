@@ -12,7 +12,7 @@ public sealed class WebhookAttemptConfiguration : IEntityTypeConfiguration<Webho
             table.HasCheckConstraint("webhook_attempts_attempt_number_check", "attempt_number > 0");
             table.HasCheckConstraint(
                 "webhook_attempts_outcome_check",
-                "outcome IN ('succeeded', 'failed')");
+                "outcome IN ('succeeded', 'retryable_failure', 'permanent_failure')");
             table.HasCheckConstraint(
                 "webhook_attempts_http_status_code_check",
                 "http_status_code IS NULL OR http_status_code BETWEEN 100 AND 599");

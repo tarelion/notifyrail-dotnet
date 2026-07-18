@@ -36,13 +36,18 @@ public sealed class WebhookDispatcher(
             cancellationToken);
         stopwatch.Stop();
         var statusCode = (int)response.StatusCode;
-        var succeeded = statusCode is >= 200 and <= 299;
+        var outcome = statusCode switch
+        {
+            >= 200 and <= 299 => WebhookOutcome.Succeeded,
+            408 or 429 or >= 500 => WebhookOutcome.RetryableFailure,
+            _ => WebhookOutcome.PermanentFailure,
+        };
         return new WebhookResult(
-            succeeded ? WebhookOutcome.Succeeded : WebhookOutcome.Failed,
+            outcome,
             statusCode,
             stopwatch.ElapsedMilliseconds,
-            succeeded ? null : "http_error",
-            succeeded ? null : $"Webhook endpoint returned HTTP {statusCode}.");
+            outcome == WebhookOutcome.Succeeded ? null : "http_error",
+            outcome == WebhookOutcome.Succeeded ? null : $"Webhook endpoint returned HTTP {statusCode}.");
     }
 
     private static string Sign(string secret, string timestamp, string body)

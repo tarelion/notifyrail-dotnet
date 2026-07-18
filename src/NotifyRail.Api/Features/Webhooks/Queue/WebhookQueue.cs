@@ -6,6 +6,7 @@ namespace NotifyRail.Api.Features.Webhooks.Queue;
 public sealed class WebhookQueue(NotifyRailDbContext dbContext)
 {
     private static readonly TimeSpan StaleClaimTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(1);
 
     public async Task<IReadOnlyList<WebhookJob>> ClaimDueAsync(
         string workerId,
@@ -38,7 +39,8 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
             WITH due AS (
                 SELECT id
                 FROM webhook_events AS candidate
-                WHERE candidate.status = 'pending'
+                WHERE candidate.status IN ('pending', 'retry_scheduled')
+                    AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= {claimTime})
                     AND NOT EXISTS (
                         SELECT 1
                         FROM webhook_events AS earlier
@@ -53,6 +55,7 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
                 UPDATE webhook_events
                 SET
                     status = 'processing',
+                    next_attempt_at = NULL,
                     claimed_at = {claimTime},
                     claimed_by = {workerId},
                     updated_at = {claimTime}
@@ -98,6 +101,16 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
         var errorMessage = Bound(result.ErrorMessage, 500);
         var outcome = ToDatabaseValue(result.Outcome);
         var succeeded = result.Outcome == WebhookOutcome.Succeeded;
+        var retryable = result.Outcome == WebhookOutcome.RetryableFailure;
+        var eventStatus = result.Outcome switch
+        {
+            WebhookOutcome.Succeeded => "succeeded",
+            WebhookOutcome.RetryableFailure => "retry_scheduled",
+            WebhookOutcome.PermanentFailure => "failed",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(result), result.Outcome, "Unknown webhook outcome."),
+        };
+        var nextAttemptAt = retryable ? completedAt.Add(RetryDelay) : (DateTimeOffset?)null;
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         var recorded = await dbContext.Database.ExecuteSqlInterpolatedAsync(
@@ -128,8 +141,9 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
             $"""
             UPDATE webhook_events
             SET
-                status = {outcome},
+                status = {eventStatus},
                 attempt_count = {claim.AttemptNumber},
+                next_attempt_at = {nextAttemptAt},
                 claimed_at = NULL,
                 claimed_by = NULL,
                 succeeded_at = CASE WHEN {succeeded} THEN {completedAt}::timestamptz ELSE NULL END,
@@ -156,7 +170,8 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
         return outcome switch
         {
             WebhookOutcome.Succeeded => "succeeded",
-            WebhookOutcome.Failed => "failed",
+            WebhookOutcome.RetryableFailure => "retryable_failure",
+            WebhookOutcome.PermanentFailure => "permanent_failure",
             _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown webhook outcome."),
         };
     }

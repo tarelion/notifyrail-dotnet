@@ -77,7 +77,7 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Fact]
-    public async Task ProcessBatchAsync_RecordsBoundedFailureWithoutChangingDeliveryTruth()
+    public async Task ProcessBatchAsync_SchedulesServerFailureAndRecordsBoundedRetryableAttempt()
     {
         await ResetDatabaseAsync();
         var remoteBody = new string('x', 2_000);
@@ -96,13 +96,46 @@ public sealed class WebhookWorkerIntegrationTests
         var state = await LoadWebhookStateAsync();
         Assert.Equal(1, processed);
         Assert.Equal("sent", state.DeliveryStatus);
-        Assert.Equal("failed", state.EventStatus);
-        Assert.Equal("failed", state.AttemptOutcome);
+        Assert.Equal("retry_scheduled", state.EventStatus);
+        Assert.NotNull(state.NextAttemptAt);
+        Assert.True(state.NextAttemptAt > state.CompletedAt);
+        Assert.Equal("retryable_failure", state.AttemptOutcome);
         Assert.Equal(500, state.HttpStatusCode);
         Assert.Equal("http_error", state.ErrorCode);
         Assert.NotNull(state.ErrorMessage);
         Assert.True(state.ErrorMessage.Length <= 500);
         Assert.DoesNotContain(remoteBody, state.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.MovedPermanently, "failed", "permanent_failure")]
+    [InlineData(HttpStatusCode.BadRequest, "failed", "permanent_failure")]
+    [InlineData(HttpStatusCode.RequestTimeout, "retry_scheduled", "retryable_failure")]
+    [InlineData(HttpStatusCode.TooManyRequests, "retry_scheduled", "retryable_failure")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "retry_scheduled", "retryable_failure")]
+    public async Task ProcessBatchAsync_ClassifiesHttpFailure(
+        HttpStatusCode statusCode,
+        string expectedEventStatus,
+        string expectedAttemptOutcome)
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(statusCode);
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var worker = scope.ServiceProvider.GetRequiredService<WebhookWorker>();
+        var processed = await worker.ProcessBatchAsync(
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        var state = await LoadWebhookStateAsync();
+        Assert.Equal(1, processed);
+        Assert.Equal(expectedEventStatus, state.EventStatus);
+        Assert.Equal(expectedAttemptOutcome, state.AttemptOutcome);
+        Assert.Equal((int)statusCode, state.HttpStatusCode);
+        Assert.Equal(expectedEventStatus == "retry_scheduled", state.NextAttemptAt.HasValue);
     }
 
     [Fact]
@@ -225,6 +258,7 @@ public sealed class WebhookWorkerIntegrationTests
                 webhook_events.payload AS "Payload",
                 webhook_events.status AS "EventStatus",
                 webhook_events.attempt_count AS "EventAttemptCount",
+                webhook_events.next_attempt_at AS "NextAttemptAt",
                 webhook_events.succeeded_at AS "EventSucceededAt",
                 webhook_attempts.attempt_number AS "AttemptNumber",
                 webhook_attempts.outcome AS "AttemptOutcome",
@@ -253,6 +287,7 @@ public sealed class WebhookWorkerIntegrationTests
         public string Payload { get; init; } = null!;
         public string EventStatus { get; init; } = null!;
         public int EventAttemptCount { get; init; }
+        public DateTimeOffset? NextAttemptAt { get; init; }
         public DateTimeOffset? EventSucceededAt { get; init; }
         public int AttemptNumber { get; init; }
         public string AttemptOutcome { get; init; } = null!;

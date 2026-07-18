@@ -92,7 +92,7 @@ public sealed class WebhookWorker
         {
             _logger.LogWarning(exception, "Webhook dispatch failed for event {WebhookEventId}", request.EventId);
             return new WebhookResult(
-                Outcome: WebhookOutcome.Failed,
+                Outcome: WebhookOutcome.RetryableFailure,
                 HttpStatusCode: null,
                 LatencyMilliseconds: 0,
                 ErrorCode: "network_error",
