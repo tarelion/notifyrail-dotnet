@@ -12,6 +12,22 @@ public sealed class WebhookEndpointAddressPolicy(
         string host,
         CancellationToken cancellationToken)
     {
+        try
+        {
+            await ResolveAllowedAddressesAsync(host, cancellationToken);
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is UnsafeWebhookEndpointException or SocketException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    public async ValueTask<IPAddress[]> ResolveAllowedAddressesAsync(
+        string host,
+        CancellationToken cancellationToken)
+    {
         var normalizedHost = host.TrimEnd('.');
         var isLocalhostName = string.Equals(
             normalizedHost,
@@ -26,28 +42,30 @@ public sealed class WebhookEndpointAddressPolicy(
         }
         else
         {
-            try
-            {
-                addresses = await dnsResolver.ResolveAsync(normalizedHost, cancellationToken);
-            }
-            catch (Exception exception) when (
-                exception is SocketException or ArgumentException)
-            {
-                return false;
-            }
+            addresses = await dnsResolver.ResolveAsync(normalizedHost, cancellationToken);
         }
 
         if (addresses.Length == 0)
         {
-            return false;
+            throw new UnsafeWebhookEndpointException();
         }
 
         if (isLocalhostName || isLoopbackLiteral)
         {
-            return options.Value.AllowLocalhostEndpoints && addresses.All(IsLoopback);
+            if (options.Value.AllowLocalhostEndpoints && addresses.All(IsLoopback))
+            {
+                return addresses;
+            }
+
+            throw new UnsafeWebhookEndpointException();
         }
 
-        return addresses.All(IsPublic);
+        if (addresses.All(IsPublic))
+        {
+            return addresses;
+        }
+
+        throw new UnsafeWebhookEndpointException();
     }
 
     public static bool IsPublic(IPAddress address)
@@ -143,3 +161,5 @@ public sealed class WebhookEndpointAddressPolicy(
         return (bytes[wholeBytes] & mask) == (network[wholeBytes] & mask);
     }
 }
+
+internal sealed class UnsafeWebhookEndpointException : Exception;

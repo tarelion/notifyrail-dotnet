@@ -10,6 +10,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NotifyRail.Api.Features.Webhooks;
+using NotifyRail.Api.Features.Webhooks.Dispatch;
+using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Infrastructure.Persistence;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Features.Webhooks.Persistence;
@@ -32,6 +34,7 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
                 builder.UseSetting(
                     "Authentication:Operator:Credential",
                     OperatorCredential);
+                builder.UseSetting("Webhooks:AllowLocalhostEndpoints", "false");
                 builder.ConfigureServices(UsePublicDnsAnswer);
             });
     }
@@ -413,6 +416,48 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task WebhookDispatcher_RejectsDnsRebindingAfterEndpointRegistration()
+    {
+        using var factory = CreateFactory(services =>
+        {
+            services.RemoveAll<IWebhookDnsResolver>();
+            services.AddSingleton<IWebhookDnsResolver>(new SequenceWebhookDnsResolver(
+                [IPAddress.Parse("93.184.216.34")],
+                [IPAddress.Parse("93.184.216.34"), IPAddress.Parse("10.0.0.8")]));
+        });
+        await EnsureDatabaseReadyAsync(factory);
+
+        using var client = CreateOperatorClient(factory);
+        var apiClient = await CreateApiClientAsync(client);
+        const string url = "https://rebind.example/webhooks?token=secret";
+        using var registration = await client.PutAsJsonAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint",
+            new { url });
+        Assert.Equal(HttpStatusCode.Created, registration.StatusCode);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var protector = scope.ServiceProvider.GetRequiredService<IWebhookSecretProtector>();
+        var dispatcher = scope.ServiceProvider.GetRequiredService<WebhookDispatcher>();
+        var result = await dispatcher.SendAsync(
+            new WebhookRequest(
+                Guid.NewGuid(),
+                url,
+                "{}",
+                protector.Protect("nrs_test-secret")),
+            DateTimeOffset.UtcNow,
+            CancellationToken.None);
+
+        Assert.Equal(WebhookOutcome.PermanentFailure, result.Outcome);
+        Assert.Equal("unsafe_endpoint", result.ErrorCode);
+        Assert.Equal(
+            "Webhook endpoint resolved to a prohibited network destination.",
+            result.ErrorMessage);
+        Assert.DoesNotContain("rebind", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("10.0.0.8", result.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ManageWebhookEndpoint_ReturnsUnauthorized_WithoutOperatorCredential()
     {
         await EnsureDatabaseReadyAsync();
@@ -550,6 +595,20 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
             CancellationToken cancellationToken)
         {
             return ValueTask.FromResult(addresses);
+        }
+    }
+
+    private sealed class SequenceWebhookDnsResolver(params IPAddress[][] answers)
+        : IWebhookDnsResolver
+    {
+        private int _index = -1;
+
+        public ValueTask<IPAddress[]> ResolveAsync(
+            string host,
+            CancellationToken cancellationToken)
+        {
+            var index = Math.Min(Interlocked.Increment(ref _index), answers.Length - 1);
+            return ValueTask.FromResult(answers[index]);
         }
     }
 

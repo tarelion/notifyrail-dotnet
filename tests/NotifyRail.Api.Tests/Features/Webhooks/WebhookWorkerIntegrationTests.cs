@@ -139,6 +139,34 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task ProcessBatchAsync_DoesNotFollowRedirects()
+    {
+        await ResetDatabaseAsync();
+        await using var destination = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent);
+        await using var redirectingEndpoint = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.TemporaryRedirect,
+            redirectLocation: destination.Url);
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(redirectingEndpoint.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var worker = scope.ServiceProvider.GetRequiredService<WebhookWorker>();
+        var processed = await worker.ProcessBatchAsync(
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        var state = await LoadWebhookStateAsync();
+        Assert.Equal(1, processed);
+        Assert.Equal(1, redirectingEndpoint.ReceivedCount);
+        Assert.Equal(0, destination.ReceivedCount);
+        Assert.Equal("failed", state.EventStatus);
+        Assert.Equal("permanent_failure", state.AttemptOutcome);
+        Assert.Equal((int)HttpStatusCode.TemporaryRedirect, state.HttpStatusCode);
+    }
+
+    [Fact]
     public async Task ProcessBatchAsync_SchedulesConfiguredBackoffWithInjectedJitter()
     {
         await ResetDatabaseAsync();
@@ -995,7 +1023,8 @@ public sealed class WebhookWorkerIntegrationTests
             HttpStatusCode statusCode,
             string? responseBody = null,
             string? retryAfter = null,
-            TimeSpan? responseDelay = null)
+            TimeSpan? responseDelay = null,
+            string? redirectLocation = null)
         {
             var received = new TaskCompletionSource<ReceivedWebhook>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1026,6 +1055,10 @@ public sealed class WebhookWorkerIntegrationTests
                     if (retryAfter is not null)
                     {
                         context.Response.Headers.RetryAfter = retryAfter;
+                    }
+                    if (redirectLocation is not null)
+                    {
+                        context.Response.Headers.Location = redirectLocation;
                     }
                     if (responseBody is not null)
                     {
