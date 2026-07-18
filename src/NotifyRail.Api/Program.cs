@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using NotifyRail.Api.Authentication;
 using NotifyRail.Api.Features.ApiClients.CreateApiClient;
@@ -20,12 +21,24 @@ using NotifyRail.Api.Features.Messages.GetMessageReport;
 using NotifyRail.Api.Features.Otp;
 using NotifyRail.Api.Features.Otp.SendOtp;
 using NotifyRail.Api.Features.Otp.VerifyOtp;
+using NotifyRail.Api.Features.Webhooks;
+using NotifyRail.Api.Features.Webhooks.ManageWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddNotifyRailHealth(builder.Configuration);
 builder.Services.AddNotifyRailAuthentication();
+
+var dataProtection = builder.Services.AddDataProtection()
+    .SetApplicationName("NotifyRail");
+var dataProtectionKeyRingPath =
+    builder.Configuration[$"{WebhookOptions.SectionName}:DataProtectionKeyRingPath"];
+if (!string.IsNullOrWhiteSpace(dataProtectionKeyRingPath))
+{
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyRingPath));
+}
 
 var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres");
 if (!string.IsNullOrWhiteSpace(postgresConnectionString))
@@ -60,6 +73,11 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
             "Otp:MaxAttempts must be greater than zero.")
         .ValidateOnStart();
     builder.Services.AddSingleton(TimeProvider.System);
+    builder.Services.Configure<WebhookOptions>(
+        builder.Configuration.GetSection(WebhookOptions.SectionName));
+    builder.Services.AddSingleton<IWebhookSecretProtector, DataProtectionWebhookSecretProtector>();
+    builder.Services.AddSingleton<WebhookEndpointUrlValidator>();
+    builder.Services.AddScoped<WebhookEndpointManager>();
     builder.Services.AddScoped<ApiClientCreator>();
     builder.Services.AddScoped<ApiKeyCreator>();
     builder.Services.AddScoped<ApiClientDisabler>();
@@ -101,6 +119,7 @@ app.MapDisableApiClientEndpoint();
 app.MapGetCurrentApiClientEndpoint();
 app.MapListApiKeysEndpoint();
 app.MapRevokeApiKeyEndpoint();
+app.MapManageWebhookEndpointEndpoints();
 app.MapCreateMessageEndpoint();
 app.MapGetMessageEndpoint();
 app.MapGetMessageDeliveriesEndpoint();
