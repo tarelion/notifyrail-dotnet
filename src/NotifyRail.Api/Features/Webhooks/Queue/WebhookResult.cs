@@ -5,4 +5,5 @@ public sealed record WebhookResult(
     int? HttpStatusCode,
     long LatencyMilliseconds,
     string? ErrorCode = null,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    TimeSpan? RetryAfter = null);

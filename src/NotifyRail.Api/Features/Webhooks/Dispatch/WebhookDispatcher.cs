@@ -30,24 +30,45 @@ public sealed class WebhookDispatcher(
         };
 
         var stopwatch = Stopwatch.StartNew();
-        using var response = await httpClient.SendAsync(
-            message,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
-        stopwatch.Stop();
-        var statusCode = (int)response.StatusCode;
-        var outcome = statusCode switch
+        try
         {
-            >= 200 and <= 299 => WebhookOutcome.Succeeded,
-            408 or 429 or >= 500 => WebhookOutcome.RetryableFailure,
-            _ => WebhookOutcome.PermanentFailure,
-        };
-        return new WebhookResult(
-            outcome,
-            statusCode,
-            stopwatch.ElapsedMilliseconds,
-            outcome == WebhookOutcome.Succeeded ? null : "http_error",
-            outcome == WebhookOutcome.Succeeded ? null : $"Webhook endpoint returned HTTP {statusCode}.");
+            using var response = await httpClient.SendAsync(
+                message,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            stopwatch.Stop();
+            var statusCode = (int)response.StatusCode;
+            var outcome = statusCode switch
+            {
+                >= 200 and <= 299 => WebhookOutcome.Succeeded,
+                408 or 429 or >= 500 => WebhookOutcome.RetryableFailure,
+                _ => WebhookOutcome.PermanentFailure,
+            };
+            return new WebhookResult(
+                outcome,
+                statusCode,
+                stopwatch.ElapsedMilliseconds,
+                outcome == WebhookOutcome.Succeeded ? null : "http_error",
+                outcome == WebhookOutcome.Succeeded ? null : $"Webhook endpoint returned HTTP {statusCode}.",
+                outcome == WebhookOutcome.RetryableFailure
+                    ? ParseRetryAfter(response, timestamp)
+                    : null);
+        }
+        catch (Exception exception) when (
+            !cancellationToken.IsCancellationRequested
+            && exception is HttpRequestException or TimeoutException or TaskCanceledException)
+        {
+            stopwatch.Stop();
+            var timedOut = exception is TimeoutException or TaskCanceledException;
+            return new WebhookResult(
+                WebhookOutcome.RetryableFailure,
+                HttpStatusCode: null,
+                stopwatch.ElapsedMilliseconds,
+                timedOut ? "timeout" : "network_error",
+                timedOut
+                    ? "Webhook request timed out."
+                    : "Webhook request failed before a response was received.");
+        }
     }
 
     private static string Sign(string secret, string timestamp, string body)
@@ -55,5 +76,30 @@ public sealed class WebhookDispatcher(
         var content = Encoding.UTF8.GetBytes($"{timestamp}.{body}");
         var hash = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), content);
         return $"v1={Convert.ToHexStringLower(hash)}";
+    }
+
+    private static TimeSpan? ParseRetryAfter(
+        HttpResponseMessage response,
+        DateTimeOffset requestedAt)
+    {
+        if (!response.Headers.TryGetValues("Retry-After", out var values))
+        {
+            return null;
+        }
+
+        var value = values.SingleOrDefault();
+        if (!RetryConditionHeaderValue.TryParse(value, out var retryAfter))
+        {
+            return null;
+        }
+
+        if (retryAfter.Delta is { } delta)
+        {
+            return delta;
+        }
+
+        return retryAfter.Date is { } date
+            ? TimeSpan.FromTicks(Math.Max(0, (date - requestedAt).Ticks))
+            : null;
     }
 }

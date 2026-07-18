@@ -91,12 +91,15 @@ public sealed class WebhookWorker
             && exception is HttpRequestException or TimeoutException or TaskCanceledException)
         {
             _logger.LogWarning(exception, "Webhook dispatch failed for event {WebhookEventId}", request.EventId);
+            var timedOut = exception is TimeoutException or TaskCanceledException;
             return new WebhookResult(
                 Outcome: WebhookOutcome.RetryableFailure,
                 HttpStatusCode: null,
                 LatencyMilliseconds: 0,
-                ErrorCode: "network_error",
-                ErrorMessage: exception.Message);
+                ErrorCode: timedOut ? "timeout" : "network_error",
+                ErrorMessage: timedOut
+                    ? "Webhook request timed out."
+                    : "Webhook request failed before a response was received.");
         }
     }
 }
