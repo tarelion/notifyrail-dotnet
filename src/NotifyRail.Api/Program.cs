@@ -91,6 +91,8 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
             "WebhookWorker:MaximumRetryDelay must not be less than BaseRetryDelay.")
         .Validate(options => options.JitterRatio is >= 0 and <= 1,
             "WebhookWorker:JitterRatio must be between zero and one.")
+        .Validate(options => options.ClaimTimeout > TimeSpan.Zero,
+            "WebhookWorker:ClaimTimeout must be greater than zero.")
         .ValidateOnStart();
     builder.Services.AddSingleton<IWebhookRetryJitter, RandomWebhookRetryJitter>();
     builder.Services.AddSingleton<IWebhookSecretProtector, DataProtectionWebhookSecretProtector>();

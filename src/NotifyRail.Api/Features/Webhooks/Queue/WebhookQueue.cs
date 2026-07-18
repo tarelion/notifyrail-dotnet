@@ -7,13 +7,13 @@ namespace NotifyRail.Api.Features.Webhooks.Queue;
 
 public sealed class WebhookQueue
 {
-    private static readonly TimeSpan StaleClaimTimeout = TimeSpan.FromMinutes(5);
     private readonly NotifyRailDbContext _dbContext;
     private readonly IWebhookRetryJitter _jitter;
     private readonly TimeSpan _baseRetryDelay;
     private readonly TimeSpan _minimumRetryDelay;
     private readonly TimeSpan _maximumRetryDelay;
     private readonly double _jitterRatio;
+    private readonly TimeSpan _claimTimeout;
 
     public WebhookQueue(
         NotifyRailDbContext dbContext,
@@ -39,6 +39,10 @@ public sealed class WebhookQueue
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Jitter ratio must be between zero and one.");
         }
+        if (value.ClaimTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Claim timeout must be positive.");
+        }
 
         _dbContext = dbContext;
         _jitter = jitter;
@@ -46,6 +50,7 @@ public sealed class WebhookQueue
         _minimumRetryDelay = value.MinimumRetryDelay;
         _maximumRetryDelay = value.MaximumRetryDelay;
         _jitterRatio = value.JitterRatio;
+        _claimTimeout = value.ClaimTimeout;
     }
 
     public async Task<IReadOnlyList<WebhookJob>> ClaimDueAsync(
@@ -65,22 +70,22 @@ public sealed class WebhookQueue
 
         workerId = workerId.Trim();
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-        var staleBefore = claimTime.Subtract(StaleClaimTimeout);
-        await _dbContext.Database.ExecuteSqlInterpolatedAsync(
-            $"""
-            UPDATE webhook_events
-            SET status = 'pending', claimed_at = NULL, claimed_by = NULL, updated_at = {claimTime}
-            WHERE status = 'processing' AND claimed_at <= {staleBefore}
-            """,
-            cancellationToken);
-
+        var staleBefore = claimTime.Subtract(_claimTimeout);
         var rows = await _dbContext.Database.SqlQuery<ClaimedWebhookRow>(
             $"""
             WITH due AS (
                 SELECT id
                 FROM webhook_events AS candidate
-                WHERE candidate.status IN ('pending', 'retry_scheduled')
-                    AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= {claimTime})
+                WHERE (
+                        (
+                            candidate.status IN ('pending', 'retry_scheduled')
+                            AND (candidate.next_attempt_at IS NULL OR candidate.next_attempt_at <= {claimTime})
+                        )
+                        OR (
+                            candidate.status = 'processing'
+                            AND candidate.claimed_at <= {staleBefore}
+                        )
+                    )
                     AND NOT EXISTS (
                         SELECT 1
                         FROM webhook_events AS earlier

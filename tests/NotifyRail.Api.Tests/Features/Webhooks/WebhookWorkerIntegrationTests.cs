@@ -316,6 +316,97 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task ClaimDueAsync_RecoversClaimAfterConfiguredTimeout()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync("http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var firstClaimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var options = Options.Create(new WebhookWorkerOptions
+        {
+            WorkerId = "stale-claim-worker",
+            ClaimTimeout = TimeSpan.FromSeconds(30),
+        });
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = new WebhookQueue(
+            scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            options,
+            new FixedWebhookRetryJitter(0.5));
+
+        var firstJob = Assert.Single(await queue.ClaimDueAsync(
+            "worker-a",
+            1,
+            firstClaimTime,
+            CancellationToken.None));
+        Assert.Empty(await queue.ClaimDueAsync(
+            "worker-b",
+            1,
+            firstClaimTime.AddSeconds(29),
+            CancellationToken.None));
+
+        var recoveredJob = Assert.Single(await queue.ClaimDueAsync(
+            "worker-b",
+            1,
+            firstClaimTime.AddSeconds(30),
+            CancellationToken.None));
+
+        Assert.Equal(firstJob.Request.EventId, recoveredJob.Request.EventId);
+        Assert.Equal(firstJob.Request.Body, recoveredJob.Request.Body);
+        Assert.Equal(1, recoveredJob.Claim.AttemptNumber);
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_SkipsLockedStaleClaimAndClaimsUnrelatedDelivery()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync("http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId, ["+905551111111", "+905552222222"]);
+        await RecordAcceptedDeliveriesAsync(count: 2);
+        var firstClaimTime = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var options = Options.Create(new WebhookWorkerOptions
+        {
+            WorkerId = "skip-locked-worker",
+            ClaimTimeout = TimeSpan.FromSeconds(30),
+        });
+
+        await using var firstScope = _factory.Services.CreateAsyncScope();
+        var firstQueue = new WebhookQueue(
+            firstScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            options,
+            new FixedWebhookRetryJitter(0.5));
+        var staleJob = Assert.Single(await firstQueue.ClaimDueAsync(
+            "worker-a",
+            1,
+            firstClaimTime,
+            CancellationToken.None));
+
+        await using var lockScope = _factory.Services.CreateAsyncScope();
+        var lockContext = lockScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        await using var lockTransaction =
+            await lockContext.Database.BeginTransactionAsync(CancellationToken.None);
+        await lockContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT id FROM webhook_events WHERE id = {staleJob.Request.EventId} FOR UPDATE");
+
+        await using var claimScope = _factory.Services.CreateAsyncScope();
+        var claimContext = claimScope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        claimContext.Database.SetCommandTimeout(TimeSpan.FromSeconds(1));
+        var queue = new WebhookQueue(
+            claimContext,
+            options,
+            new FixedWebhookRetryJitter(0.5));
+
+        var claimed = Assert.Single(await queue.ClaimDueAsync(
+            "worker-b",
+            1,
+            firstClaimTime.AddSeconds(30),
+            CancellationToken.None));
+
+        Assert.NotEqual(staleJob.Request.EventId, claimed.Request.EventId);
+    }
+
+    [Fact]
     public async Task ProcessBatchAsync_SchedulesTimeoutAndRecordsNormalizedAttempt()
     {
         await ResetDatabaseAsync();
