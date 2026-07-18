@@ -500,7 +500,7 @@ public sealed class DeliveryQueueIntegrationTests
 
         await dbContext.Database.MigrateAsync(CancellationToken.None);
         await dbContext.Database.ExecuteSqlRawAsync(
-            "TRUNCATE otp_challenges, delivery_attempts, deliveries, messages;",
+            "TRUNCATE webhook_events, otp_challenges, delivery_attempts, deliveries, messages;",
             CancellationToken.None);
     }
 

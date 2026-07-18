@@ -3,8 +3,8 @@
 ## Purpose
 
 This page defines the PostgreSQL schema currently mapped by EF Core for
-API Clients, API Keys, Webhook Endpoints, Webhook Secrets, messages,
-deliveries, delivery attempts, and OTP challenges. Migrations remain
+API Clients, API Keys, Webhook Endpoints, Webhook Secrets, Webhook Events,
+messages, deliveries, delivery attempts, and OTP challenges. Migrations remain
 the executable schema history; this page is the canonical human- and
 agent-readable contract.
 
@@ -13,7 +13,7 @@ agent-readable contract.
 - DbContext: `src/NotifyRail.Api/Infrastructure/Persistence/NotifyRailDbContext.cs`
 - Entity mappings: `ApiClientConfiguration`, `ApiKeyConfiguration`,
   `WebhookEndpointConfiguration`, `WebhookSecretConfiguration`,
-  `MessageConfiguration`, `DeliveryConfiguration`,
+  `WebhookEventConfiguration`, `MessageConfiguration`, `DeliveryConfiguration`,
   `DeliveryAttemptConfiguration`, and `OtpChallengeConfiguration`
 - Migrations: `src/NotifyRail.Api/Infrastructure/Persistence/Migrations`
 
@@ -116,6 +116,32 @@ The `IWebhookSecretProtector` boundary uses the purpose
 filesystem key ring rather than the application database. The initial
 `nrs_<secret>` credential is returned only on creation; later persistence and
 Management API reads expose no plaintext or recoverable display value.
+
+## `webhook_events`
+
+| Column | PostgreSQL type | Required | Contract |
+| --- | --- | --- | --- |
+| `id` | `uuid` | yes | Stable event identifier reused by every dispatch attempt. |
+| `api_client_id` | `uuid` | yes | Owning API Client. |
+| `webhook_endpoint_id` | `uuid` | yes | Endpoint selected when the event was created. |
+| `message_id` | `uuid` | yes | Message whose Delivery changed. |
+| `delivery_id` | `uuid` | yes | Delivery whose client-visible transition occurred. |
+| `type` | `text` | yes | Versioned event type; the first tracer bullet emits `delivery.sent`. |
+| `version` | `integer` | yes | Positive payload contract version; initially `1`. |
+| `sequence` | `integer` | yes | Positive, monotonic sequence within one Delivery. |
+| `occurred_at` | `timestamp with time zone` | yes | Delivery transition instant. |
+| `payload` | `text` | yes | Exact serialized JSON body used for signing and dispatch. |
+| `status` | `text` | yes | One of `pending`, `processing`, `succeeded`, or `failed`. |
+| `attempt_count` | `integer` | yes | Number of recorded Webhook Attempts; defaults to zero. |
+| `claimed_at` | `timestamp with time zone` | no | Claim instant, present only while processing. |
+| `claimed_by` | `text` | no | Non-blank worker identity, present only while processing. |
+| `succeeded_at` | `timestamp with time zone` | no | Present exactly when status is `succeeded`. |
+| `created_at` | `timestamp with time zone` | yes | Durable outbox creation instant. |
+| `updated_at` | `timestamp with time zone` | yes | Latest dispatch state-change instant. |
+
+`(delivery_id, sequence)` is unique. The due-work index on
+`(status, created_at)` supports the dedicated Webhook Queue. The payload is
+stored as text so the bytes signed by NotifyRail are the bytes sent over HTTP.
 
 ## `messages`
 
@@ -233,6 +259,9 @@ Cross-table OTP invariants:
   `(message_id, recipient)` is unique.
 - Provider-result recording inserts an Attempt and updates its Delivery in one
   transaction.
+- An accepted provider result creates `delivery.sent` in that same transaction
+  when the Message owner has an active Webhook Endpoint. A rollback leaves no
+  Webhook Event, and endpoint registration does not backfill earlier transitions.
 - `deliveries.attempt_count` equals the number of recorded Attempts for that
   Delivery.
 - Schema changes require an EF Core migration; entity mappings and this
