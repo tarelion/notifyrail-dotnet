@@ -46,6 +46,10 @@ worker opens a DI scope for each batch so scoped dependencies such as
 | `WebhookWorker:WorkerId` | configuration / `WebhookWorkerOptions.WorkerId` | `notifyrail-webhook-<guid>` | Trimmed non-empty identity independent from the Delivery Worker. |
 | `WebhookWorker:BatchSize` | configuration / `WebhookWorkerOptions.BatchSize` | `1` | Maximum events processed per poll. Events are claimed individually immediately before dispatch; `0` uses the default and negative values are invalid. |
 | `WebhookWorker:PollInterval` | configuration / `WebhookWorkerOptions.PollInterval` | `500ms` | `00:00:00` uses the default; negative values are invalid. |
+| `WebhookWorker:BaseRetryDelay` | configuration / `WebhookWorkerOptions.BaseRetryDelay` | `1m` | Exponential retry delay before jitter; it must not be less than the minimum delay. |
+| `WebhookWorker:MinimumRetryDelay` | configuration / `WebhookWorkerOptions.MinimumRetryDelay` | `1s` | Positive lower safety bound for computed delays and valid `Retry-After` values. |
+| `WebhookWorker:MaximumRetryDelay` | configuration / `WebhookWorkerOptions.MaximumRetryDelay` | `1h` | Upper safety bound not less than the base delay. |
+| `WebhookWorker:JitterRatio` | configuration / `WebhookWorkerOptions.JitterRatio` | `0.2` | Random proportional offset in the inclusive range `0` to `1`; `0.2` gives a multiplier from `0.8` through `1.2`. |
 | `MockProvider:Rules` | configuration / `MockProviderOptions.Rules` | empty | Recipient-specific mock outcome sequences. Unmatched recipients are accepted. |
 | `MockProviderCallback:Secret` | configuration / `MockProviderCallbackOptions.Secret` | none | Required provider-specific HMAC secret for authenticating mock Provider Callbacks. It is separate from API Keys, Operator Credentials, and Webhook Secrets. |
 | `MockProviderCallback:SignatureTolerance` | configuration / `MockProviderCallbackOptions.SignatureTolerance` | `00:05:00` | Maximum accepted clock difference in either direction for mock Provider Callback signatures. |
@@ -298,12 +302,13 @@ transactional, and OTP Deliveries. `WebhookWorkerBackgroundService` polls the
 persisted events independently from `DeliveryWorkerBackgroundService`.
 
 `WebhookQueue.ClaimDueAsync` recovers five-minute stale claims, then claims
-pending events through `FOR UPDATE SKIP LOCKED`. A candidate is skipped while a
-lower-sequence event for the same Delivery has not reached a terminal dispatch
-state. Unrelated Deliveries can still be claimed in the same batch or by
-another worker. The claim transaction commits before any HTTP request is made.
-Each request is a `POST` whose body is the exact JSON text persisted on the
-Webhook Event.
+pending events and due `retry_scheduled` events through `FOR UPDATE SKIP
+LOCKED`. A retry is not claimable before `next_attempt_at`. A candidate is
+skipped while a lower-sequence event for the same Delivery has not reached a
+terminal dispatch state. Unrelated Deliveries can still be claimed in the same
+batch or by another worker. The claim transaction commits before any HTTP
+request is made. Each request is a `POST` whose body is the exact JSON text
+persisted on the Webhook Event.
 Redirect following is disabled. The worker claims one event immediately before
 each send, up to the configured batch limit, so later batch items do not consume
 their claim lease while an earlier endpoint is responding.
@@ -319,14 +324,28 @@ The outbound headers are:
 The v1 signature input is the UTF-8 encoding of
 `<timestamp>.<exact_body>`. The HMAC key is the owning API Client's unprotected
 Webhook Secret. The timestamp is captured for each request immediately before
-dispatch. Any HTTP 2xx response marks the event `succeeded`; another
-status or a network failure marks this initial tracer-bullet event `failed`.
-Reliable retry and dead-event behavior is intentionally delivered by later v2
-slices.
+dispatch.
+
+Dispatch outcomes are normalized as follows:
+
+| Remote outcome | Webhook Attempt outcome | Webhook Event state |
+| --- | --- | --- |
+| HTTP 2xx | `succeeded` | `succeeded` |
+| Network error, timeout, HTTP 408, HTTP 429, or HTTP 5xx | `retryable_failure` | `retry_scheduled` |
+| Redirect or any other HTTP 3xx/4xx | `permanent_failure` | `failed` |
+
+Attempt `N` uses `BaseRetryDelay * 2^(N-1)` and a jitter multiplier uniformly
+bounded by `1 - JitterRatio` and `1 + JitterRatio`. The result is clamped to the
+configured minimum and maximum delay. The clock and jitter source are injected,
+so exact schedules can be reproduced in tests. A valid delta-seconds or HTTP-date
+`Retry-After` value replaces the computed backoff and is clamped to the same
+safety bounds; an invalid value falls back to exponential backoff.
 
 Every request records one Webhook Attempt. Attempts retain status code, timing,
 latency, normalized outcome, and error diagnostics bounded to 100 characters
 for codes and 500 characters for messages. Response bodies are not persisted.
+Network and timeout diagnostics are normalized rather than persisting raw
+exception or endpoint details.
 Webhook dispatch state never changes Delivery status.
 
 The canonical table, relationship, constraint, and index definitions are in
@@ -334,5 +353,7 @@ the [persistence model reference](persistence-model.md).
 
 ## Current Limits
 
-- The retry attempt cap is not configurable.
+- The 24-hour automatic retry deadline and Dead Webhook Event transition are
+  delivered by the later dead-event slice; until then, transient outcomes keep
+  scheduling retries.
 - The stale claim lease is not configurable.
