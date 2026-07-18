@@ -27,12 +27,16 @@ public static class RegisterWebhookEndpoint
         WebhookEndpointRegistrar registrar,
         CancellationToken cancellationToken)
     {
-        if (!validator.TryNormalize(request.Url, out var url, out var error))
+        var validation = await validator.ValidateAsync(request.Url, cancellationToken);
+        if (!validation.IsValid)
         {
-            return Results.BadRequest(new RegisterWebhookEndpointErrorResponse(error));
+            return Results.BadRequest(new RegisterWebhookEndpointErrorResponse(validation.Error));
         }
 
-        var response = await registrar.RegisterAsync(apiClientId, url, cancellationToken);
+        var response = await registrar.RegisterAsync(
+            apiClientId,
+            validation.NormalizedUrl,
+            cancellationToken);
         if (response is null)
         {
             return Results.NotFound();

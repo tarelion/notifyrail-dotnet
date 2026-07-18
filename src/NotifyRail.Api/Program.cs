@@ -101,6 +101,8 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
         .ValidateOnStart();
     builder.Services.AddSingleton<IWebhookRetryJitter, RandomWebhookRetryJitter>();
     builder.Services.AddSingleton<IWebhookSecretProtector, DataProtectionWebhookSecretProtector>();
+    builder.Services.AddSingleton<IWebhookDnsResolver, SystemWebhookDnsResolver>();
+    builder.Services.AddSingleton<WebhookEndpointAddressPolicy>();
     builder.Services.AddSingleton<WebhookEndpointUrlValidator>();
     builder.Services.AddScoped<WebhookEndpointRegistrar>();
     builder.Services.AddScoped<WebhookEndpointReader>();
