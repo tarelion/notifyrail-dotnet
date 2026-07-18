@@ -11,7 +11,9 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
 - Health endpoints: `src/NotifyRail.Api/Features/Health`
 - Management API Client endpoints: `src/NotifyRail.Api/Features/ApiClients`
 - Management Webhook Endpoint operations:
-  `src/NotifyRail.Api/Features/Webhooks/ManageWebhookEndpoint`
+  `src/NotifyRail.Api/Features/Webhooks/RegisterWebhookEndpoint`,
+  `src/NotifyRail.Api/Features/Webhooks/InspectWebhookEndpoint`, and
+  `src/NotifyRail.Api/Features/Webhooks/DisableWebhookEndpoint`
 - Message endpoint: `src/NotifyRail.Api/Features/Messages/CreateMessage`
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
 - Message summary endpoint:
