@@ -9,17 +9,25 @@ public sealed class WebhookEvent
     {
     }
 
-    public static WebhookEvent CreateDeliveryStateChanged(
+    internal static WebhookEvent CreateDeliveryStateChanged(
         Guid apiClientId,
         Guid webhookEndpointId,
         Guid messageId,
         Guid deliveryId,
         string recipient,
-        string status,
+        DeliveryWebhookEventStatus status,
         int sequence,
         DateTimeOffset occurredAt)
     {
-        var type = $"delivery.{status}";
+        var statusValue = status switch
+        {
+            DeliveryWebhookEventStatus.Sent => "sent",
+            DeliveryWebhookEventStatus.Delivered => "delivered",
+            DeliveryWebhookEventStatus.Failed => "failed",
+            DeliveryWebhookEventStatus.Expired => "expired",
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown delivery event status."),
+        };
+        var type = $"delivery.{statusValue}";
         var id = Guid.NewGuid();
         var payload = JsonSerializer.Serialize(new WebhookEventEnvelope(
             id,
@@ -30,7 +38,7 @@ public sealed class WebhookEvent
                 messageId,
                 deliveryId,
                 sequence,
-                status,
+                statusValue,
                 recipient)));
 
         return new WebhookEvent
@@ -83,4 +91,12 @@ public sealed class WebhookEvent
         [property: JsonPropertyName("sequence")] int Sequence,
         [property: JsonPropertyName("status")] string Status,
         [property: JsonPropertyName("recipient")] string Recipient);
+}
+
+internal enum DeliveryWebhookEventStatus
+{
+    Sent,
+    Delivered,
+    Failed,
+    Expired,
 }

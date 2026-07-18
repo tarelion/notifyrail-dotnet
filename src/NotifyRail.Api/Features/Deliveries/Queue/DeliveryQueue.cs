@@ -98,9 +98,8 @@ public sealed class DeliveryQueue
                     cancellationToken);
             foreach (var deliveryId in expiredDeliveryIds)
             {
-                await _webhookOutbox.CreateDeliveryEventAsync(
+                await _webhookOutbox.CreateDeliveryExpiredAsync(
                     deliveryId,
-                    "expired",
                     claimTime,
                     cancellationToken);
             }
@@ -312,9 +311,8 @@ public sealed class DeliveryQueue
         }
         else if (!ShouldScheduleRetry(result.Outcome, claim.AttemptNumber))
         {
-            await _webhookOutbox.CreateDeliveryEventAsync(
+            await _webhookOutbox.CreateDeliveryFailedAsync(
                 claim.DeliveryId,
-                "failed",
                 attemptedAt,
                 cancellationToken);
         }

@@ -144,9 +144,9 @@ Management API reads expose no plaintext or recoverable display value.
 
 `(delivery_id, sequence)` is unique. The due-work index on
 `(status, created_at)` supports the dedicated Webhook Queue. A lower-sequence
-pending or processing event prevents a later event for the same Delivery from
-being claimed without blocking other Deliveries. The payload is stored as text
-so the bytes signed by NotifyRail are the bytes sent over HTTP.
+event in any nonterminal dispatch state prevents a later event for the same
+Delivery from being claimed without blocking other Deliveries. The payload is
+stored as text so the bytes signed by NotifyRail are the bytes sent over HTTP.
 
 ## `webhook_attempts`
 

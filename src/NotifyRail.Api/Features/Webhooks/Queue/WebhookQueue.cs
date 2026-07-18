@@ -44,7 +44,7 @@ public sealed class WebhookQueue(NotifyRailDbContext dbContext)
                         FROM webhook_events AS earlier
                         WHERE earlier.delivery_id = candidate.delivery_id
                             AND earlier.sequence < candidate.sequence
-                            AND earlier.status IN ('pending', 'processing')
+                            AND earlier.status NOT IN ('succeeded', 'failed')
                     )
                 ORDER BY candidate.created_at, candidate.id
                 FOR UPDATE SKIP LOCKED

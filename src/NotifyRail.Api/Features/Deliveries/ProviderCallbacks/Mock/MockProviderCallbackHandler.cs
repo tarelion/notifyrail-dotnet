@@ -34,11 +34,20 @@ public sealed class MockProviderCallbackHandler(
                 .Where(delivery => delivery.ProviderMessageId == providerMessageId)
                 .Select(delivery => delivery.Id)
                 .SingleAsync(cancellationToken);
-            await webhookOutbox.CreateDeliveryEventAsync(
-                deliveryId,
-                status,
-                updatedAt,
-                cancellationToken);
+            if (status == "delivered")
+            {
+                await webhookOutbox.CreateDeliveryDeliveredAsync(
+                    deliveryId,
+                    updatedAt,
+                    cancellationToken);
+            }
+            else
+            {
+                await webhookOutbox.CreateDeliveryFailedAsync(
+                    deliveryId,
+                    updatedAt,
+                    cancellationToken);
+            }
         }
 
         await transaction.CommitAsync(cancellationToken);

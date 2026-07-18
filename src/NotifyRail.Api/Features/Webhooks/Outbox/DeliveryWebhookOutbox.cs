@@ -11,12 +11,52 @@ public sealed class DeliveryWebhookOutbox(NotifyRailDbContext dbContext)
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
-        await CreateDeliveryEventAsync(deliveryId, "sent", occurredAt, cancellationToken);
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Sent,
+            occurredAt,
+            cancellationToken);
     }
 
-    public async Task CreateDeliveryEventAsync(
+    public async Task CreateDeliveryDeliveredAsync(
         Guid deliveryId,
-        string status,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Delivered,
+            occurredAt,
+            cancellationToken);
+    }
+
+    public async Task CreateDeliveryFailedAsync(
+        Guid deliveryId,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Failed,
+            occurredAt,
+            cancellationToken);
+    }
+
+    public async Task CreateDeliveryExpiredAsync(
+        Guid deliveryId,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await CreateDeliveryEventAsync(
+            deliveryId,
+            DeliveryWebhookEventStatus.Expired,
+            occurredAt,
+            cancellationToken);
+    }
+
+    private async Task CreateDeliveryEventAsync(
+        Guid deliveryId,
+        DeliveryWebhookEventStatus status,
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
