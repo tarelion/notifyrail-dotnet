@@ -36,9 +36,16 @@ public sealed class WebhookEndpointRegistrar(
             return CreateResponse(current, plaintextSecret: null);
         }
 
+        var latestCreatedAt = await dbContext.WebhookEndpoints
+            .Where(endpoint => endpoint.ApiClientId == apiClientId)
+            .MaxAsync(endpoint => (DateTimeOffset?)endpoint.CreatedAt, cancellationToken);
+        if (latestCreatedAt is not null)
+        {
+            now = NextTimestamp(now, latestCreatedAt.Value);
+        }
+
         if (current is not null)
         {
-            now = NextTimestamp(now, current.CreatedAt);
             current.Disable(now);
             await dbContext.SaveChangesAsync(cancellationToken);
         }

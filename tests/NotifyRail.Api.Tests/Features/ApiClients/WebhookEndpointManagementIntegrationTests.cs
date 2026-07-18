@@ -191,7 +191,7 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task InspectWebhookEndpoint_ReturnsLatestEndpoint_WhenClockDoesNotAdvance()
+    public async Task InspectWebhookEndpoint_ReturnsLatestDisabledEndpoint_WhenClockDoesNotAdvance()
     {
         using var factory = CreateFactory(services =>
         {
@@ -209,17 +209,25 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
             new { url = "https://first.example.com/webhooks" });
         var first = await firstResponse.Content
             .ReadFromJsonAsync<RegisterWebhookEndpointResponse>();
+        using var firstDisableResponse = await client.PostAsync(
+            $"{route}/disable",
+            content: null);
         using var secondResponse = await client.PutAsJsonAsync(
             route,
             new { url = "https://second.example.com/webhooks" });
         var second = await secondResponse.Content
             .ReadFromJsonAsync<RegisterWebhookEndpointResponse>();
+        using var secondDisableResponse = await client.PostAsync(
+            $"{route}/disable",
+            content: null);
         using var inspectResponse = await client.GetAsync(route);
         using var inspected = JsonDocument.Parse(
             await inspectResponse.Content.ReadAsStringAsync());
 
         Assert.NotNull(first);
         Assert.NotNull(second);
+        Assert.Equal(HttpStatusCode.NoContent, firstDisableResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, secondDisableResponse.StatusCode);
         Assert.True(second.CreatedAt > first.CreatedAt);
         Assert.Equal(
             second.WebhookEndpointId,
