@@ -14,7 +14,9 @@ RUN dotnet publish src/NotifyRail.Api/NotifyRail.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS runtime
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/lib/notifyrail/data-protection-keys \
+    && chown -R $APP_UID /var/lib/notifyrail
 
 WORKDIR /app
 COPY --from=build /app/publish/ ./
