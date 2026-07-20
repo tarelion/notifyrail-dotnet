@@ -805,6 +805,37 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task RotateAsync_WaitsForInFlightOldSecretDispatch()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromMilliseconds(500));
+        var (apiClientId, oldSecret) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+
+        await using var workerScope = _factory.Services.CreateAsyncScope();
+        var worker = workerScope.ServiceProvider.GetRequiredService<WebhookWorker>();
+        var processing = worker.ProcessBatchAsync(
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None);
+        var received = await receiver.Received.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(Sign(oldSecret, received.Timestamp, received.Body), received.Signature);
+
+        await using var rotationScope = _factory.Services.CreateAsyncScope();
+        var rotator = rotationScope.ServiceProvider.GetRequiredService<WebhookSecretRotator>();
+        var rotating = rotator.RotateAsync(apiClientId, CancellationToken.None);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        Assert.False(rotating.IsCompleted);
+
+        Assert.Equal(1, await processing);
+        var rotation = await rotating.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.NotNull(rotation);
+    }
+
+    [Fact]
     public async Task ProcessBatchAsync_ConcurrentWorkersSendDifferentDeliveriesInParallel()
     {
         await ResetDatabaseAsync();

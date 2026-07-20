@@ -9,10 +9,16 @@ public sealed class WebhookEndpointReader(NotifyRailDbContext dbContext)
         Guid apiClientId,
         CancellationToken cancellationToken)
     {
-        var apiClientExists = await dbContext.ApiClients
-            .AnyAsync(apiClient => apiClient.Id == apiClientId, cancellationToken);
-        if (!apiClientExists)
+        await using var transaction =
+            await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var apiClient = await dbContext.ApiClients
+            .FromSqlInterpolated(
+                $"SELECT * FROM api_clients WHERE id = {apiClientId} FOR SHARE")
+            .AsNoTracking()
+            .SingleOrDefaultAsync(cancellationToken);
+        if (apiClient is null)
         {
+            await transaction.CommitAsync(cancellationToken);
             return null;
         }
 
@@ -35,6 +41,7 @@ public sealed class WebhookEndpointReader(NotifyRailDbContext dbContext)
             .FirstOrDefaultAsync(cancellationToken);
         if (endpoint is null)
         {
+            await transaction.CommitAsync(cancellationToken);
             return null;
         }
 
@@ -46,15 +53,18 @@ public sealed class WebhookEndpointReader(NotifyRailDbContext dbContext)
         var overlapExpiresAt = await dbContext.WebhookSecrets
             .AsNoTracking()
             .Where(secret => secret.ApiClientId == apiClientId && secret.RetiredAt != null)
-            .OrderByDescending(secret => secret.CreatedAt)
+            .OrderByDescending(secret => secret.RetiredAt)
+            .ThenByDescending(secret => secret.CreatedAt)
             .ThenByDescending(secret => secret.Id)
             .Select(secret => secret.RetiredAt)
             .FirstOrDefaultAsync(cancellationToken);
 
-        return endpoint with
+        var response = endpoint with
         {
             WebhookSecretCreatedAt = currentSecretCreatedAt,
             WebhookSecretOverlapExpiresAt = overlapExpiresAt,
         };
+        await transaction.CommitAsync(cancellationToken);
+        return response;
     }
 }

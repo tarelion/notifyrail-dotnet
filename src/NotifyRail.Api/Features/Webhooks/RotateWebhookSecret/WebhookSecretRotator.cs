@@ -29,6 +29,10 @@ public sealed class WebhookSecretRotator(
             return null;
         }
 
+        await dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({apiClientId.ToString()}, 0))",
+            cancellationToken);
+
         var current = await dbContext.WebhookSecrets.SingleOrDefaultAsync(
             secret => secret.ApiClientId == apiClientId && secret.RetiredAt == null,
             cancellationToken);

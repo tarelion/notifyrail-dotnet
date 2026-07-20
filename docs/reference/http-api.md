@@ -312,8 +312,9 @@ new plaintext secret appears exactly once in the `201 Created` response:
 }
 ```
 
-Outbound requests claimed after rotation commits use the new secret. The
-previous encrypted secret remains acceptable to a receiver until
+Rotation waits for an old-secret request already in flight. Any outbound
+request that has not started waits for the rotation commit and reloads the new
+secret before signing. The previous encrypted secret remains acceptable to a receiver until
 `overlap_expires_at`; at and after that instant it is retired. A further
 rotation immediately retires any older overlap and starts a new overlap for
 the secret it replaces.

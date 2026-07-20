@@ -59,8 +59,15 @@ public sealed class WebhookWorker
             }
 
             var job = jobs[0];
+            await using var signingLease = await _queue.AcquireSigningLeaseAsync(
+                job.Request.ApiClientId,
+                cancellationToken);
             var attemptedAt = PostgresTimestamp.Normalize(_timeProvider.GetUtcNow());
-            var result = await _dispatcher.SendAsync(job.Request, attemptedAt, cancellationToken);
+            var request = job.Request with
+            {
+                ProtectedSecret = signingLease.ProtectedSecret,
+            };
+            var result = await _dispatcher.SendAsync(request, attemptedAt, cancellationToken);
             var completedAt = PostgresTimestamp.Normalize(_timeProvider.GetUtcNow());
             await _queue.RecordResultAsync(
                 job.Claim,

@@ -318,7 +318,13 @@ event's owning API Client in identifier order. Webhook Secret rotation uses the
 same row lock. A claim that races rotation therefore selects either the complete
 pre-rotation state or the committed new current secret, never a mixed or stale
 post-rotation state. Claims completed after rotation commits use only the new
-secret.
+secret. Immediately before sending, the worker also acquires a PostgreSQL
+session-level shared signing lease and reloads the current protected secret.
+Rotation takes the matching exclusive advisory lock inside its transaction, so
+it waits for an old-secret request already in flight and a request that has not
+started waits for rotation and reloads the new secret. No database transaction
+is held during the HTTP request; releasing the signing lease ends only the
+session-level advisory lock.
 The claim lease must exceed the outbound request timeout so a live request
 cannot become eligible for concurrent recovery.
 Immediately before opening a connection, NotifyRail resolves the endpoint again
