@@ -79,6 +79,95 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task RotateWebhookSecret_ReturnsNewSecretOnceAndExposesOnlyRotationMetadata()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        using var factory = CreateFactory(services =>
+        {
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(new FixedTimeProvider(now));
+        });
+        await EnsureDatabaseReadyAsync(factory);
+
+        using var client = CreateOperatorClient(factory);
+        var apiClient = await CreateApiClientAsync(client);
+        var endpointRoute =
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint";
+        using var registerResponse = await client.PutAsJsonAsync(
+            endpointRoute,
+            new { url = "https://hooks.example.com/notifyrail" });
+        var registered = await registerResponse.Content
+            .ReadFromJsonAsync<RegisterWebhookEndpointResponse>();
+        Assert.NotNull(registered?.WebhookSecret);
+
+        using var rotationResponse = await client.PostAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-secret/rotate",
+            content: null);
+        var rotated = await rotationResponse.Content
+            .ReadFromJsonAsync<RotateWebhookSecretResponse>();
+
+        Assert.Equal(HttpStatusCode.Created, rotationResponse.StatusCode);
+        Assert.NotNull(rotated);
+        Assert.StartsWith("nrs_", rotated.WebhookSecret, StringComparison.Ordinal);
+        Assert.NotEqual(registered.WebhookSecret, rotated.WebhookSecret);
+        Assert.Equal(now, rotated.CreatedAt);
+        Assert.Equal(now.AddHours(24), rotated.OverlapExpiresAt);
+
+        using var inspectResponse = await client.GetAsync(endpointRoute);
+        using var inspected = JsonDocument.Parse(
+            await inspectResponse.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, inspectResponse.StatusCode);
+        Assert.False(inspected.RootElement.TryGetProperty("webhook_secret", out _));
+        Assert.Equal(
+            now,
+            inspected.RootElement.GetProperty("webhook_secret_created_at")
+                .GetDateTimeOffset());
+        Assert.Equal(
+            now.AddHours(24),
+            inspected.RootElement.GetProperty("webhook_secret_overlap_expires_at")
+                .GetDateTimeOffset());
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        var protector = scope.ServiceProvider.GetRequiredService<IWebhookSecretProtector>();
+        var secrets = await dbContext.WebhookSecrets
+            .AsNoTracking()
+            .Where(secret => secret.ApiClientId == apiClient.ApiClientId)
+            .OrderBy(secret => secret.RetiredAt == null ? 1 : 0)
+            .ToListAsync();
+
+        Assert.Equal(2, secrets.Count);
+        Assert.All(secrets, secret => Assert.NotEmpty(secret.ProtectedValue));
+        Assert.Equal(registered.WebhookSecret, protector.Unprotect(secrets[0].ProtectedValue));
+        Assert.Equal(rotated.WebhookSecret, protector.Unprotect(secrets[1].ProtectedValue));
+        Assert.Equal(now.AddHours(24), secrets[0].RetiredAt);
+        Assert.Null(secrets[1].RetiredAt);
+        Assert.DoesNotContain(
+            registered.WebhookSecret,
+            Encoding.UTF8.GetString(secrets[0].ProtectedValue),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            rotated.WebhookSecret,
+            Encoding.UTF8.GetString(secrets[1].ProtectedValue),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RotateWebhookSecret_ReturnsNotFound_WhenInitialSecretDoesNotExist()
+    {
+        await EnsureDatabaseReadyAsync();
+
+        using var client = CreateOperatorClient();
+        var apiClient = await CreateApiClientAsync(client);
+        using var response = await client.PostAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-secret/rotate",
+            content: null);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DisableWebhookEndpoint_LeavesApiClientAvailableForPolling()
     {
         await EnsureDatabaseReadyAsync();
@@ -483,10 +572,14 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
         using var disableResponse = await client.PostAsync(
             $"/management/api-clients/{apiClient.ApiClientId}/webhook-endpoint/disable",
             content: null);
+        using var rotateResponse = await client.PostAsync(
+            $"/management/api-clients/{apiClient.ApiClientId}/webhook-secret/rotate",
+            content: null);
 
         Assert.Equal(HttpStatusCode.Unauthorized, registerResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, inspectResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, disableResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, rotateResponse.StatusCode);
     }
 
     [Fact]
@@ -592,6 +685,12 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
     private sealed record InspectWebhookEndpointResponse(
         [property: JsonPropertyName("is_enabled")] bool IsEnabled,
         [property: JsonPropertyName("disabled_at")] DateTimeOffset? DisabledAt);
+
+    private sealed record RotateWebhookSecretResponse(
+        [property: JsonPropertyName("webhook_secret")] string WebhookSecret,
+        [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
+        [property: JsonPropertyName("overlap_expires_at")]
+        DateTimeOffset OverlapExpiresAt);
 
     private sealed record RegisterWebhookEndpointErrorResponse(
         [property: JsonPropertyName("error")] string Error);

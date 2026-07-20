@@ -29,6 +29,7 @@ using NotifyRail.Api.Features.Webhooks.InspectWebhookEndpoint;
 using NotifyRail.Api.Features.Webhooks.Outbox;
 using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.RotateWebhookSecret;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Infrastructure.Persistence;
@@ -80,8 +81,14 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
             "Otp:MaxAttempts must be greater than zero.")
         .ValidateOnStart();
     builder.Services.AddSingleton(TimeProvider.System);
-    builder.Services.Configure<WebhookOptions>(
-        builder.Configuration.GetSection(WebhookOptions.SectionName));
+    builder.Services.AddOptions<WebhookOptions>()
+        .Bind(builder.Configuration.GetSection(WebhookOptions.SectionName))
+        .Validate(options => options.SecretRotationOverlap > TimeSpan.Zero,
+            "Webhooks:SecretRotationOverlap must be greater than zero.")
+        .Validate(
+            options => options.SecretRotationOverlap <= WebhookOptions.MaximumSecretRotationOverlap,
+            "Webhooks:SecretRotationOverlap must not exceed 30 days.")
+        .ValidateOnStart();
     builder.Services.AddOptions<WebhookWorkerOptions>()
         .Bind(builder.Configuration.GetSection(WebhookWorkerOptions.SectionName))
         .Validate(options => options.MinimumRetryDelay > TimeSpan.Zero,
@@ -108,6 +115,7 @@ if (!string.IsNullOrWhiteSpace(postgresConnectionString))
     builder.Services.AddScoped<WebhookEndpointRegistrar>();
     builder.Services.AddScoped<WebhookEndpointReader>();
     builder.Services.AddScoped<WebhookEndpointDisabler>();
+    builder.Services.AddScoped<WebhookSecretRotator>();
     builder.Services.AddScoped<DeliveryWebhookOutbox>();
     builder.Services.AddScoped<WebhookQueue>();
     builder.Services.AddHttpClient<WebhookDispatcher>((serviceProvider, client) =>
@@ -168,6 +176,7 @@ app.MapRevokeApiKeyEndpoint();
 app.MapRegisterWebhookEndpoint();
 app.MapInspectWebhookEndpoint();
 app.MapDisableWebhookEndpoint();
+app.MapRotateWebhookSecret();
 app.MapCreateMessageEndpoint();
 app.MapGetMessageEndpoint();
 app.MapGetMessageDeliveriesEndpoint();

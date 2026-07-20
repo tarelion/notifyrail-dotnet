@@ -92,6 +92,7 @@ retryable, and permanent failure paths easy to demonstrate.
 | `PUT /management/api-clients/{id}/webhook-endpoint` | Register or explicitly replace a Webhook Endpoint |
 | `GET /management/api-clients/{id}/webhook-endpoint` | Inspect the latest Webhook Endpoint without revealing its secret |
 | `POST /management/api-clients/{id}/webhook-endpoint/disable` | Disable the active Webhook Endpoint without disabling its API Client |
+| `POST /management/api-clients/{id}/webhook-secret/rotate` | Rotate the Webhook Secret and return the new value once |
 | `GET /api-client` | Validate an API Key and return its API Client identity |
 | `POST /messages` | Idempotent message and delivery creation |
 | `GET /messages/{message_id}` | Message metadata and delivery status counts |
