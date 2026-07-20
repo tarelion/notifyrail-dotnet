@@ -346,6 +346,16 @@ The v1 signature input is the UTF-8 encoding of
 Webhook Secret. The timestamp is captured for each request immediately before
 dispatch.
 
+During rotation, receivers keep the previous and new plaintext secrets only in
+their own secret store. They verify the new secret first and may try the
+previous secret only while their trusted local clock is strictly before the
+`overlap_expires_at` returned by the rotation operation. At the deadline the
+previous secret must be deleted or disabled and signatures matching only that
+secret are rejected. The webhook's caller-controlled timestamp must not be used
+to extend the overlap; receivers apply their normal timestamp-age and replay
+checks separately. HMAC comparisons use a fixed-time comparison over the exact
+received body.
+
 Dispatch outcomes are normalized as follows:
 
 | Remote outcome | Webhook Attempt outcome | Webhook Event state |
