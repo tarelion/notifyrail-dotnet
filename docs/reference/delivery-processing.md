@@ -313,6 +313,12 @@ for the same Delivery has not reached a terminal dispatch state. Unrelated
 Deliveries can still be claimed in the same batch or by another worker. The
 claim transaction commits before any HTTP request is made. Each request is a
 `POST` whose body is the exact JSON text persisted on the Webhook Event.
+Before loading signing material, the claim transaction locks each claimed
+event's owning API Client in identifier order. Webhook Secret rotation uses the
+same row lock. A claim that races rotation therefore selects either the complete
+pre-rotation state or the committed new current secret, never a mixed or stale
+post-rotation state. Claims completed after rotation commits use only the new
+secret.
 The claim lease must exceed the outbound request timeout so a live request
 cannot become eligible for concurrent recovery.
 Immediately before opening a connection, NotifyRail resolves the endpoint again

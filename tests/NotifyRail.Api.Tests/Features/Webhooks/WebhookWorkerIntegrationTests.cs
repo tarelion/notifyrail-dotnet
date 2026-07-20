@@ -15,8 +15,10 @@ using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Deliveries.Queue;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.RotateWebhookSecret;
 using NotifyRail.Api.Features.Webhooks.Dispatch;
 using NotifyRail.Api.Features.Webhooks.Queue;
+using NotifyRail.Api.Features.Webhooks.Persistence;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Infrastructure.Persistence;
@@ -74,6 +76,36 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.Equal(204, state.HttpStatusCode);
         Assert.Null(state.ErrorCode);
         Assert.Null(state.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_UsesOnlyNewSecretAfterRotation()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(HttpStatusCode.NoContent);
+        var (apiClientId, oldSecret) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+
+        string newSecret;
+        await using (var rotationScope = _factory.Services.CreateAsyncScope())
+        {
+            var rotation = await rotationScope.ServiceProvider
+                .GetRequiredService<WebhookSecretRotator>()
+                .RotateAsync(apiClientId, CancellationToken.None);
+            Assert.NotNull(rotation);
+            newSecret = rotation.WebhookSecret;
+        }
+
+        await using var workerScope = _factory.Services.CreateAsyncScope();
+        var worker = workerScope.ServiceProvider.GetRequiredService<WebhookWorker>();
+        Assert.Equal(1, await worker.ProcessBatchAsync(
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None));
+
+        var received = await receiver.Received.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(Sign(newSecret, received.Timestamp, received.Body), received.Signature);
+        Assert.NotEqual(Sign(oldSecret, received.Timestamp, received.Body), received.Signature);
     }
 
     [Fact]
@@ -638,6 +670,54 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.Equal(2, jobs.Length);
         Assert.Equal(2, jobs.Select(job => job.Request.EventId).Distinct().Count());
         Assert.Equal(2, jobs.Select(job => job.Claim.WorkerId).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_WaitsForConcurrentRotationAndSelectsCommittedSecret()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, oldSecret) = await CreateApiClientWithEndpointAsync(
+            "http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var rotatedAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        const string newSecret = "nrs_concurrent-rotation-secret";
+
+        await using var rotationScope = _factory.Services.CreateAsyncScope();
+        var rotationContext = rotationScope.ServiceProvider
+            .GetRequiredService<NotifyRailDbContext>();
+        var protector = rotationScope.ServiceProvider
+            .GetRequiredService<IWebhookSecretProtector>();
+        await using var rotationTransaction =
+            await rotationContext.Database.BeginTransactionAsync();
+        await rotationContext.ApiClients
+            .FromSqlInterpolated(
+                $"SELECT * FROM api_clients WHERE id = {apiClientId} FOR UPDATE")
+            .SingleAsync();
+        var oldPersistedSecret = await rotationContext.WebhookSecrets.SingleAsync(
+            secret => secret.ApiClientId == apiClientId && secret.RetiredAt == null);
+        oldPersistedSecret.Retire(rotatedAt.AddHours(24));
+        rotationContext.WebhookSecrets.Add(WebhookSecret.Create(
+            apiClientId,
+            protector.Protect(newSecret),
+            rotatedAt));
+        await rotationContext.SaveChangesAsync();
+
+        await using var claimScope = _factory.Services.CreateAsyncScope();
+        var queue = claimScope.ServiceProvider.GetRequiredService<WebhookQueue>();
+        var claiming = queue.ClaimDueAsync(
+            "rotation-race-worker",
+            1,
+            rotatedAt,
+            CancellationToken.None);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(150));
+        Assert.False(claiming.IsCompleted);
+
+        await rotationTransaction.CommitAsync();
+        var job = Assert.Single(await claiming.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Equal(newSecret, protector.Unprotect(job.Request.ProtectedSecret));
+        Assert.NotEqual(oldSecret, protector.Unprotect(job.Request.ProtectedSecret));
     }
 
     [Fact]
