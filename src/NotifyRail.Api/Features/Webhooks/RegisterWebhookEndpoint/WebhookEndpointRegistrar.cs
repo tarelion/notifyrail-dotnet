@@ -51,7 +51,9 @@ public sealed class WebhookEndpointRegistrar(
         }
 
         var secretExists = await dbContext.WebhookSecrets
-            .AnyAsync(secret => secret.ApiClientId == apiClientId, cancellationToken);
+            .AnyAsync(
+                secret => secret.ApiClientId == apiClientId && secret.RetiredAt == null,
+                cancellationToken);
         string? plaintextSecret = null;
         if (!secretExists)
         {

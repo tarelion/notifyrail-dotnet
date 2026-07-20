@@ -23,8 +23,8 @@ agent-readable contract.
 - One API Client has zero or more API Keys and Messages.
 - One API Client has zero or more historical Webhook Endpoints and at most one
   active Webhook Endpoint.
-- One API Client has zero or one initial Webhook Secret. Secret rotation may
-  extend that relationship in a later schema migration.
+- One API Client has zero or more historical Webhook Secrets and exactly one
+  current secret after the first Webhook Endpoint is registered.
 - One message has one delivery per normalized recipient.
 - Each delivery references one message through `deliveries.message_id`.
 - Each delivery attempt references one delivery through
@@ -108,17 +108,25 @@ row in one transaction. Disabling an endpoint does not disable its API Client.
 | `api_client_id` | `uuid` | yes | Unique reference to the owning `api_clients(id)`. |
 | `protected_value` | `bytea` | yes | Non-empty .NET Data Protection ciphertext; plaintext is never persisted. |
 | `created_at` | `timestamp with time zone` | yes | Secret creation instant. |
+| `retired_at` | `timestamp with time zone` | no | `NULL` for the current signing secret; otherwise the overlap deadline at or after which receivers reject it. |
 
 Indexes and uniqueness:
 
 - Primary key on `id`.
-- Unique index `webhook_secrets_api_client_id_key` on `api_client_id`.
+- Partial unique index `webhook_secrets_active_api_client_id_key` on
+  `api_client_id` where `retired_at IS NULL`.
+- Index `webhook_secrets_api_client_created_at_idx` on
+  `(api_client_id, created_at)` for rotation metadata reads.
 
 The `IWebhookSecretProtector` boundary uses the purpose
 `NotifyRail.Webhooks.Secrets.v1`. Data Protection keys live in the configured
-filesystem key ring rather than the application database. The initial
-`nrs_<secret>` credential is returned only on creation; later persistence and
-Management API reads expose no plaintext or recoverable display value.
+filesystem key ring rather than the application database. The initial and each
+rotated `nrs_<secret>` credential is returned only in its creation response;
+later persistence and Management API reads expose no plaintext or recoverable
+display value. Rotation retires the prior current secret at the configured
+overlap deadline. A subsequent rotation immediately retires any older
+overlapping secret, so at most the current and its immediate predecessor can be
+accepted.
 
 ## `webhook_events`
 

@@ -313,6 +313,18 @@ for the same Delivery has not reached a terminal dispatch state. Unrelated
 Deliveries can still be claimed in the same batch or by another worker. The
 claim transaction commits before any HTTP request is made. Each request is a
 `POST` whose body is the exact JSON text persisted on the Webhook Event.
+Before loading signing material, the claim transaction locks each claimed
+event's owning API Client in identifier order. Webhook Secret rotation uses the
+same row lock. A claim that races rotation therefore selects either the complete
+pre-rotation state or the committed new current secret, never a mixed or stale
+post-rotation state. Claims completed after rotation commits use only the new
+secret. Immediately before sending, the worker also acquires a PostgreSQL
+session-level shared signing lease and reloads the current protected secret.
+Rotation takes the matching exclusive advisory lock inside its transaction, so
+it waits for an old-secret request already in flight and a request that has not
+started waits for rotation and reloads the new secret. No database transaction
+is held during the HTTP request; releasing the signing lease ends only the
+session-level advisory lock.
 The claim lease must exceed the outbound request timeout so a live request
 cannot become eligible for concurrent recovery.
 Immediately before opening a connection, NotifyRail resolves the endpoint again
@@ -339,6 +351,16 @@ The v1 signature input is the UTF-8 encoding of
 `<timestamp>.<exact_body>`. The HMAC key is the owning API Client's unprotected
 Webhook Secret. The timestamp is captured for each request immediately before
 dispatch.
+
+During rotation, receivers keep the previous and new plaintext secrets only in
+their own secret store. They verify the new secret first and may try the
+previous secret only while their trusted local clock is strictly before the
+`overlap_expires_at` returned by the rotation operation. At the deadline the
+previous secret must be deleted or disabled and signatures matching only that
+secret are rejected. The webhook's caller-controlled timestamp must not be used
+to extend the overlap; receivers apply their normal timestamp-age and replay
+checks separately. HMAC comparisons use a fixed-time comparison over the exact
+received body.
 
 Dispatch outcomes are normalized as follows:
 

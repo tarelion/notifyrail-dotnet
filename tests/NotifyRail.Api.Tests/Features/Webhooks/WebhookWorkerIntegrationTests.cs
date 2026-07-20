@@ -15,8 +15,10 @@ using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Deliveries.Queue;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
+using NotifyRail.Api.Features.Webhooks.RotateWebhookSecret;
 using NotifyRail.Api.Features.Webhooks.Dispatch;
 using NotifyRail.Api.Features.Webhooks.Queue;
+using NotifyRail.Api.Features.Webhooks.Persistence;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Infrastructure.Persistence;
@@ -74,6 +76,87 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.Equal(204, state.HttpStatusCode);
         Assert.Null(state.ErrorCode);
         Assert.Null(state.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_UsesOnlyNewSecretAfterRotation()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(HttpStatusCode.NoContent);
+        var (apiClientId, oldSecret) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+
+        string newSecret;
+        await using (var rotationScope = _factory.Services.CreateAsyncScope())
+        {
+            var rotation = await rotationScope.ServiceProvider
+                .GetRequiredService<WebhookSecretRotator>()
+                .RotateAsync(apiClientId, CancellationToken.None);
+            Assert.NotNull(rotation);
+            newSecret = rotation.WebhookSecret;
+        }
+
+        await using var workerScope = _factory.Services.CreateAsyncScope();
+        var worker = workerScope.ServiceProvider.GetRequiredService<WebhookWorker>();
+        Assert.Equal(1, await worker.ProcessBatchAsync(
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None));
+
+        var received = await receiver.Received.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(Sign(newSecret, received.Timestamp, received.Body), received.Signature);
+        Assert.NotEqual(Sign(oldSecret, received.Timestamp, received.Body), received.Signature);
+    }
+
+    [Fact]
+    public async Task RotationAwareReceiver_AcceptsOverlapAndRejectsRetiredSecretAtDeadline()
+    {
+        const string oldSecret = "nrs_old-webhook-secret";
+        const string newSecret = "nrs_new-webhook-secret";
+        const string body = "{\"event_id\":\"rotation-test\"}";
+        const string timestamp = "1784548800";
+        var overlapExpiresAt = new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero);
+        var receiverTime = new AdjustableTimeProvider(overlapExpiresAt.AddTicks(-1));
+        await using var receiver = await TestWebhookReceiver.StartVerifyingAsync(
+            new RotationAwareWebhookVerifier(
+                newSecret,
+                oldSecret,
+                overlapExpiresAt,
+                receiverTime));
+        using var client = new HttpClient();
+
+        using var oldDuringOverlap = await SendSignedWebhookAsync(
+            client,
+            receiver.Url,
+            oldSecret,
+            timestamp,
+            body);
+        using var newDuringOverlap = await SendSignedWebhookAsync(
+            client,
+            receiver.Url,
+            newSecret,
+            timestamp,
+            body);
+
+        Assert.Equal(HttpStatusCode.NoContent, oldDuringOverlap.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, newDuringOverlap.StatusCode);
+
+        receiverTime.UtcNow = overlapExpiresAt;
+        using var oldAfterOverlap = await SendSignedWebhookAsync(
+            client,
+            receiver.Url,
+            oldSecret,
+            timestamp,
+            body);
+        using var newAfterOverlap = await SendSignedWebhookAsync(
+            client,
+            receiver.Url,
+            newSecret,
+            timestamp,
+            body);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, oldAfterOverlap.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, newAfterOverlap.StatusCode);
     }
 
     [Fact]
@@ -641,6 +724,54 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Fact]
+    public async Task ClaimDueAsync_WaitsForConcurrentRotationAndSelectsCommittedSecret()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, oldSecret) = await CreateApiClientWithEndpointAsync(
+            "http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var rotatedAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        const string newSecret = "nrs_concurrent-rotation-secret";
+
+        await using var rotationScope = _factory.Services.CreateAsyncScope();
+        var rotationContext = rotationScope.ServiceProvider
+            .GetRequiredService<NotifyRailDbContext>();
+        var protector = rotationScope.ServiceProvider
+            .GetRequiredService<IWebhookSecretProtector>();
+        await using var rotationTransaction =
+            await rotationContext.Database.BeginTransactionAsync();
+        await rotationContext.ApiClients
+            .FromSqlInterpolated(
+                $"SELECT * FROM api_clients WHERE id = {apiClientId} FOR UPDATE")
+            .SingleAsync();
+        var oldPersistedSecret = await rotationContext.WebhookSecrets.SingleAsync(
+            secret => secret.ApiClientId == apiClientId && secret.RetiredAt == null);
+        oldPersistedSecret.Retire(rotatedAt.AddHours(24));
+        rotationContext.WebhookSecrets.Add(WebhookSecret.Create(
+            apiClientId,
+            protector.Protect(newSecret),
+            rotatedAt));
+        await rotationContext.SaveChangesAsync();
+
+        await using var claimScope = _factory.Services.CreateAsyncScope();
+        var queue = claimScope.ServiceProvider.GetRequiredService<WebhookQueue>();
+        var claiming = queue.ClaimDueAsync(
+            "rotation-race-worker",
+            1,
+            rotatedAt,
+            CancellationToken.None);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(150));
+        Assert.False(claiming.IsCompleted);
+
+        await rotationTransaction.CommitAsync();
+        var job = Assert.Single(await claiming.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Equal(newSecret, protector.Unprotect(job.Request.ProtectedSecret));
+        Assert.NotEqual(oldSecret, protector.Unprotect(job.Request.ProtectedSecret));
+    }
+
+    [Fact]
     public async Task ProcessBatchAsync_ConcurrentWorkersSendSingleEventOnce()
     {
         await ResetDatabaseAsync();
@@ -671,6 +802,37 @@ public sealed class WebhookWorkerIntegrationTests
 
         Assert.Equal(1, processed.Sum());
         Assert.Equal(1, receiver.ReceivedCount);
+    }
+
+    [Fact]
+    public async Task RotateAsync_WaitsForInFlightOldSecretDispatch()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            responseDelay: TimeSpan.FromMilliseconds(500));
+        var (apiClientId, oldSecret) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+
+        await using var workerScope = _factory.Services.CreateAsyncScope();
+        var worker = workerScope.ServiceProvider.GetRequiredService<WebhookWorker>();
+        var processing = worker.ProcessBatchAsync(
+            TruncateToMicroseconds(DateTimeOffset.UtcNow),
+            CancellationToken.None);
+        var received = await receiver.Received.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(Sign(oldSecret, received.Timestamp, received.Body), received.Signature);
+
+        await using var rotationScope = _factory.Services.CreateAsyncScope();
+        var rotator = rotationScope.ServiceProvider.GetRequiredService<WebhookSecretRotator>();
+        var rotating = rotator.RotateAsync(apiClientId, CancellationToken.None);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        Assert.False(rotating.IsCompleted);
+
+        Assert.Equal(1, await processing);
+        var rotation = await rotating.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.NotNull(rotation);
     }
 
     [Fact]
@@ -943,6 +1105,21 @@ public sealed class WebhookWorkerIntegrationTests
         return $"v1={Convert.ToHexStringLower(hash)}";
     }
 
+    private static async Task<HttpResponseMessage> SendSignedWebhookAsync(
+        HttpClient client,
+        string url,
+        string secret,
+        string timestamp,
+        string body)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Headers.Add("X-NotifyRail-Event-Id", Guid.NewGuid().ToString());
+        request.Headers.Add("X-NotifyRail-Timestamp", timestamp);
+        request.Headers.Add("X-NotifyRail-Signature", Sign(secret, timestamp, body));
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await client.SendAsync(request);
+    }
+
     private sealed class WebhookState
     {
         public string DeliveryStatus { get; init; } = null!;
@@ -1024,7 +1201,8 @@ public sealed class WebhookWorkerIntegrationTests
             string? responseBody = null,
             string? retryAfter = null,
             TimeSpan? responseDelay = null,
-            string? redirectLocation = null)
+            string? redirectLocation = null,
+            Func<ReceivedWebhook, HttpStatusCode>? statusResolver = null)
         {
             var received = new TaskCompletionSource<ReceivedWebhook>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1051,7 +1229,7 @@ public sealed class WebhookWorkerIntegrationTests
                     {
                         await Task.Delay(delay, context.RequestAborted);
                     }
-                    context.Response.StatusCode = (int)statusCode;
+                    context.Response.StatusCode = (int)(statusResolver?.Invoke(webhook) ?? statusCode);
                     if (retryAfter is not null)
                     {
                         context.Response.Headers.RetryAfter = retryAfter;
@@ -1079,6 +1257,14 @@ public sealed class WebhookWorkerIntegrationTests
                 received.Task,
                 receivedWebhooks,
                 requestConcurrency);
+        }
+
+        public static Task<TestWebhookReceiver> StartVerifyingAsync(
+            RotationAwareWebhookVerifier verifier)
+        {
+            return StartAsync(
+                HttpStatusCode.NoContent,
+                statusResolver: verifier.Verify);
         }
 
         public async ValueTask DisposeAsync()
@@ -1122,6 +1308,42 @@ public sealed class WebhookWorkerIntegrationTests
         string Timestamp,
         string Signature,
         string Body);
+
+    private sealed class RotationAwareWebhookVerifier(
+        string currentSecret,
+        string previousSecret,
+        DateTimeOffset overlapExpiresAt,
+        TimeProvider timeProvider)
+    {
+        public HttpStatusCode Verify(ReceivedWebhook webhook)
+        {
+            if (Matches(currentSecret, webhook))
+            {
+                return HttpStatusCode.NoContent;
+            }
+
+            return timeProvider.GetUtcNow() < overlapExpiresAt
+                && Matches(previousSecret, webhook)
+                    ? HttpStatusCode.NoContent
+                    : HttpStatusCode.Unauthorized;
+        }
+
+        private static bool Matches(string secret, ReceivedWebhook webhook)
+        {
+            var expected = Encoding.UTF8.GetBytes(
+                Sign(secret, webhook.Timestamp, webhook.Body));
+            var actual = Encoding.UTF8.GetBytes(webhook.Signature);
+            return expected.Length == actual.Length
+                && CryptographicOperations.FixedTimeEquals(expected, actual);
+        }
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => UtcNow;
+    }
 
     private sealed class AdvancingTimeProvider(
         DateTimeOffset start,

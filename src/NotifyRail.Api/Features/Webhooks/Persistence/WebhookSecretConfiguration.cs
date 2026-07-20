@@ -13,6 +13,9 @@ public sealed class WebhookSecretConfiguration : IEntityTypeConfiguration<Webhoo
             table.HasCheckConstraint(
                 "webhook_secrets_protected_value_check",
                 "octet_length(protected_value) > 0");
+            table.HasCheckConstraint(
+                "webhook_secrets_retired_at_check",
+                "retired_at IS NULL OR retired_at >= created_at");
         });
 
         builder.HasKey(secret => secret.Id);
@@ -28,10 +31,17 @@ public sealed class WebhookSecretConfiguration : IEntityTypeConfiguration<Webhoo
             .HasColumnName("created_at")
             .HasColumnType("timestamp with time zone")
             .HasDefaultValueSql("now()");
+        builder.Property(secret => secret.RetiredAt)
+            .HasColumnName("retired_at")
+            .HasColumnType("timestamp with time zone");
 
         builder.HasIndex(secret => secret.ApiClientId)
             .IsUnique()
-            .HasDatabaseName("webhook_secrets_api_client_id_key");
+            .HasFilter("retired_at IS NULL")
+            .HasDatabaseName("webhook_secrets_active_api_client_id_key");
+
+        builder.HasIndex(secret => new { secret.ApiClientId, secret.CreatedAt })
+            .HasDatabaseName("webhook_secrets_api_client_created_at_idx");
 
         builder.HasOne<ApiClient>()
             .WithMany()

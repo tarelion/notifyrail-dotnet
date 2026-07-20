@@ -9,4 +9,8 @@ public sealed record InspectWebhookEndpointResponse(
     [property: JsonPropertyName("is_enabled")] bool IsEnabled,
     [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("updated_at")] DateTimeOffset UpdatedAt,
-    [property: JsonPropertyName("disabled_at")] DateTimeOffset? DisabledAt);
+    [property: JsonPropertyName("disabled_at")] DateTimeOffset? DisabledAt,
+    [property: JsonPropertyName("webhook_secret_created_at")]
+    DateTimeOffset? WebhookSecretCreatedAt,
+    [property: JsonPropertyName("webhook_secret_overlap_expires_at")]
+    DateTimeOffset? WebhookSecretOverlapExpiresAt);

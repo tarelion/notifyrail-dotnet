@@ -298,6 +298,38 @@ read endpoints.
 | `401 Unauthorized` | The Operator credential is missing or invalid. |
 | `404 Not Found` | The API Client does not exist. |
 
+## `POST /management/api-clients/{api_client_id}/webhook-secret/rotate`
+
+Creates a new current Webhook Secret and schedules the previous secret for
+retirement after the configured overlap. Requires the `Operator` policy. The
+new plaintext secret appears exactly once in the `201 Created` response:
+
+```json
+{
+  "webhook_secret": "nrs_<new-secret>",
+  "created_at": "2026-07-20T12:00:00Z",
+  "overlap_expires_at": "2026-07-21T12:00:00Z"
+}
+```
+
+Rotation waits for an old-secret request already in flight. Any outbound
+request that has not started waits for the rotation commit and reloads the new
+secret before signing. The previous encrypted secret remains acceptable to a receiver until
+`overlap_expires_at`; at and after that instant it is retired. A further
+rotation immediately retires any older overlap and starts a new overlap for
+the secret it replaces.
+
+`GET /management/api-clients/{api_client_id}/webhook-endpoint` adds
+`webhook_secret_created_at` for the current secret and
+`webhook_secret_overlap_expires_at` for the most recent rotation. It never
+returns either plaintext secret or protected secret material.
+
+| Status | Condition |
+| --- | --- |
+| `201 Created` | A new current Webhook Secret is created. |
+| `401 Unauthorized` | The Operator credential is missing or invalid. |
+| `404 Not Found` | The API Client or its initial Webhook Secret does not exist. |
+
 ## Webhook Secret protection configuration
 
 `Webhooks:DataProtectionKeyRingPath` selects the filesystem directory used by
@@ -305,6 +337,9 @@ read endpoints.
 stored in PostgreSQL. Local Compose services mount the shared,
 persistent `data_protection_keys` volume at
 `/var/lib/notifyrail/data-protection-keys`.
+
+`Webhooks:SecretRotationOverlap` controls the overlap deadline and defaults to
+`24:00:00`. Startup rejects non-positive values and values greater than 30 days.
 
 ## `GET /healthz`
 

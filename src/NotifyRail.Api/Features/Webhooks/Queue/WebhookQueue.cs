@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Infrastructure.Persistence;
 
@@ -125,21 +126,108 @@ public sealed class WebhookQueue
             )
             SELECT
                 claimed.id AS "EventId",
+                claimed.api_client_id AS "ApiClientId",
                 webhook_endpoints.url AS "EndpointUrl",
                 claimed.payload AS "Body",
-                webhook_secrets.protected_value AS "ProtectedSecret",
                 claimed.attempt_count AS "AttemptCount"
             FROM claimed
             JOIN webhook_endpoints ON webhook_endpoints.id = claimed.webhook_endpoint_id
-            JOIN webhook_secrets ON webhook_secrets.api_client_id = claimed.api_client_id
             ORDER BY claimed.created_at, claimed.id
             """).ToListAsync(cancellationToken);
+
+        var apiClientIds = rows
+            .Select(row => row.ApiClientId)
+            .Distinct()
+            .Order()
+            .ToArray();
+        if (apiClientIds.Length > 0)
+        {
+            await _dbContext.Database.SqlQuery<Guid>(
+                $"""
+                SELECT id AS "Value"
+                FROM api_clients
+                WHERE id = ANY ({apiClientIds})
+                ORDER BY id
+                FOR UPDATE
+                """).ToListAsync(cancellationToken);
+        }
+
+        var protectedSecrets = await _dbContext.WebhookSecrets
+            .AsNoTracking()
+            .Where(secret =>
+                apiClientIds.Contains(secret.ApiClientId)
+                && secret.RetiredAt == null)
+            .ToDictionaryAsync(
+                secret => secret.ApiClientId,
+                secret => secret.ProtectedValue,
+                cancellationToken);
+        if (protectedSecrets.Count != apiClientIds.Length)
+        {
+            throw new InvalidOperationException(
+                "A claimed Webhook Event has no current Webhook Secret.");
+        }
 
         await transaction.CommitAsync(cancellationToken);
         return rows.Select(row => new WebhookJob(
             new WebhookClaim(row.EventId, workerId, row.AttemptCount + 1),
-            new WebhookRequest(row.EventId, row.EndpointUrl, row.Body, row.ProtectedSecret)))
+            new WebhookRequest(
+                row.EventId,
+                row.ApiClientId,
+                row.EndpointUrl,
+                row.Body,
+                protectedSecrets[row.ApiClientId])))
             .ToArray();
+    }
+
+    public async Task<WebhookSigningLease> AcquireSigningLeaseAsync(
+        Guid apiClientId,
+        CancellationToken cancellationToken)
+    {
+        var connectionString = _dbContext.Database.GetConnectionString();
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw new InvalidOperationException(
+                "A PostgreSQL connection string is required for Webhook Secret coordination.");
+        }
+
+        var connection = new NpgsqlConnection(connectionString);
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            await using (var lockCommand = connection.CreateCommand())
+            {
+                lockCommand.CommandText =
+                    "SELECT pg_advisory_lock_shared(hashtextextended(@api_client_id, 0))";
+                lockCommand.Parameters.AddWithValue(
+                    "api_client_id",
+                    apiClientId.ToString());
+                await lockCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            byte[] protectedSecret;
+            await using (var secretCommand = connection.CreateCommand())
+            {
+                secretCommand.CommandText =
+                    """
+                    SELECT protected_value
+                    FROM webhook_secrets
+                    WHERE api_client_id = @api_client_id
+                        AND retired_at IS NULL
+                    """;
+                secretCommand.Parameters.AddWithValue("api_client_id", apiClientId);
+                protectedSecret = await secretCommand.ExecuteScalarAsync(cancellationToken)
+                    as byte[]
+                    ?? throw new InvalidOperationException(
+                        "The API Client has no current Webhook Secret.");
+            }
+
+            return new WebhookSigningLease(connection, apiClientId, protectedSecret);
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
     }
 
     public async Task RecordResultAsync(
@@ -274,9 +362,9 @@ public sealed class WebhookQueue
     private sealed class ClaimedWebhookRow
     {
         public Guid EventId { get; init; }
+        public Guid ApiClientId { get; init; }
         public string EndpointUrl { get; init; } = null!;
         public string Body { get; init; } = null!;
-        public byte[] ProtectedSecret { get; init; } = null!;
         public int AttemptCount { get; init; }
     }
 }

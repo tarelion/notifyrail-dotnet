@@ -92,6 +92,7 @@ retryable, and permanent failure paths easy to demonstrate.
 | `PUT /management/api-clients/{id}/webhook-endpoint` | Register or explicitly replace a Webhook Endpoint |
 | `GET /management/api-clients/{id}/webhook-endpoint` | Inspect the latest Webhook Endpoint without revealing its secret |
 | `POST /management/api-clients/{id}/webhook-endpoint/disable` | Disable the active Webhook Endpoint without disabling its API Client |
+| `POST /management/api-clients/{id}/webhook-secret/rotate` | Rotate the Webhook Secret and return the new value once |
 | `GET /api-client` | Validate an API Key and return its API Client identity |
 | `POST /messages` | Idempotent message and delivery creation |
 | `GET /messages/{message_id}` | Message metadata and delivery status counts |
@@ -213,15 +214,16 @@ remains available for development.
 Current validation:
 
 ```text
-Passed: 194
+Passed: 201
 Failed: 0
 Skipped: 0
 ```
 
 The tests cover message idempotency, delivery and webhook queue claiming,
 priority ordering, retry/backoff, stale claim recovery, provider callbacks,
-signed real-HTTP webhook dispatch, delivery reporting, OTP TTL, OTP one-time
-verification, Webhook Endpoint address policy, DNS rebinding protection,
+signed real-HTTP webhook dispatch, Webhook Secret rotation overlap, delivery
+reporting, OTP TTL, OTP one-time verification, Webhook Endpoint address policy,
+DNS rebinding protection,
 redirect refusal, and concurrency-sensitive behavior.
 
 ## Development Notes

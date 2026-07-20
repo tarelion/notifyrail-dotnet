@@ -27,4 +27,18 @@ public sealed class WebhookSecret
     public byte[] ProtectedValue { get; private set; } = null!;
 
     public DateTimeOffset CreatedAt { get; private set; }
+
+    public DateTimeOffset? RetiredAt { get; private set; }
+
+    public void Retire(DateTimeOffset retiredAt)
+    {
+        if (retiredAt < CreatedAt)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(retiredAt),
+                "Webhook Secret cannot retire before it was created.");
+        }
+
+        RetiredAt = retiredAt;
+    }
 }
