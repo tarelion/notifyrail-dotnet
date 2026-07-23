@@ -48,8 +48,9 @@ NotifyRail and was not altered.
 _Avoid_: API key, OTP Code
 
 **Dead Webhook Event**:
-A Webhook Event whose automatic attempts have ended without success and which
-remains available for investigation or manual replay.
+A Webhook Event whose automatic attempts ended without success. It remains a
+Dead Webhook Event available for investigation while a manual replay is
+pending and after that replay succeeds.
 _Avoid_: Failed Delivery, discarded event
 
 ## OTP Verification

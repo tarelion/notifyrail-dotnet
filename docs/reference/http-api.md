@@ -335,10 +335,9 @@ returns either plaintext secret or protected secret material.
 
 ## `GET /management/webhook-events/dead`
 
-Lists events that have entered the Dead Webhook Event set, newest-first by
-their latest dispatch-state change. Requires the `Operator` policy. An event
-remains in this list after replay; `status` describes its current dispatch
-state.
+Lists Dead Webhook Events newest-first by their latest dispatch-state change.
+Requires the `Operator` policy. A Dead Webhook Event remains in this list after
+replay; `status` describes its current dispatch state.
 
 ```json
 {
@@ -414,9 +413,9 @@ recorded by dispatch.
 
 | Status | Condition |
 | --- | --- |
-| `200 OK` | The requested Webhook Event has entered the dead-event set. |
+| `200 OK` | The requested event is a Dead Webhook Event. |
 | `401 Unauthorized` | The Operator credential is missing or invalid, including when an API Key is supplied instead. |
-| `404 Not Found` | The Webhook Event does not exist or has never entered the dead-event set. |
+| `404 Not Found` | The Webhook Event does not exist or is not a Dead Webhook Event. |
 
 ## `POST /management/webhook-events/{webhook_event_id}/replay`
 

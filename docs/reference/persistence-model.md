@@ -146,7 +146,7 @@ accepted.
 | `attempt_count` | `integer` | yes | Number of recorded Webhook Attempts; defaults to zero. |
 | `next_attempt_at` | `timestamp with time zone` | no | Required exactly while `retry_scheduled`; earliest time the event may be claimed again. |
 | `automatic_attempt_deadline_at` | `timestamp with time zone` | no | Set when the event first becomes eligible for dispatch; automatic attempts stop at this instant. |
-| `dead_at` | `timestamp with time zone` | no | First instant the event entered the Dead Webhook Event set; retained across manual replay. |
+| `dead_at` | `timestamp with time zone` | no | First instant the event became a Dead Webhook Event; retained across manual replay. |
 | `claimed_at` | `timestamp with time zone` | no | Claim instant, present only while processing. |
 | `claimed_by` | `text` | no | Non-blank worker identity, present only while processing. |
 | `succeeded_at` | `timestamp with time zone` | no | Present exactly when status is `succeeded`. |

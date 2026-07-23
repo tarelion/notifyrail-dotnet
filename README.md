@@ -217,7 +217,7 @@ remains available for development.
 Current validation:
 
 ```text
-Passed: 201
+Passed: 209
 Failed: 0
 Skipped: 0
 ```
@@ -225,8 +225,8 @@ Skipped: 0
 The tests cover message idempotency, delivery and webhook queue claiming,
 priority ordering, retry/backoff, stale claim recovery, provider callbacks,
 signed real-HTTP webhook dispatch, Webhook Secret rotation overlap, delivery
-reporting, OTP TTL, OTP one-time verification, Webhook Endpoint address policy,
-DNS rebinding protection,
+reporting, Dead Webhook Event expiry, inspection and replay, OTP TTL, OTP
+one-time verification, Webhook Endpoint address policy, DNS rebinding protection,
 redirect refusal, and concurrency-sensitive behavior.
 
 ## Development Notes
