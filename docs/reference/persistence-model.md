@@ -142,9 +142,10 @@ accepted.
 | `sequence` | `integer` | yes | Positive, monotonic sequence within one Delivery. |
 | `occurred_at` | `timestamp with time zone` | yes | Delivery transition instant. |
 | `payload` | `text` | yes | Exact serialized JSON body used for signing and dispatch. |
-| `status` | `text` | yes | One of `pending`, `processing`, `retry_scheduled`, `succeeded`, or `failed`. |
+| `status` | `text` | yes | One of `pending`, `processing`, `retry_scheduled`, `succeeded`, or `dead`. |
 | `attempt_count` | `integer` | yes | Number of recorded Webhook Attempts; defaults to zero. |
 | `next_attempt_at` | `timestamp with time zone` | no | Required exactly while `retry_scheduled`; earliest time the event may be claimed again. |
+| `automatic_attempt_deadline_at` | `timestamp with time zone` | no | Set when the event first becomes eligible for dispatch; automatic attempts stop at this instant. |
 | `claimed_at` | `timestamp with time zone` | no | Claim instant, present only while processing. |
 | `claimed_by` | `text` | no | Non-blank worker identity, present only while processing. |
 | `succeeded_at` | `timestamp with time zone` | no | Present exactly when status is `succeeded`. |
@@ -155,6 +156,12 @@ accepted.
 `(status, next_attempt_at, created_at)` supports the dedicated Webhook Queue. A
 lower-sequence event in any nonterminal dispatch state prevents a later event
 for the same Delivery from being claimed without blocking other Deliveries.
+The first eligible claim fixes the automatic-attempt deadline using
+`WebhookWorker:AutomaticRetryWindow`, which defaults to 24 hours. A retry that
+would escape that window, or a due retry first observed at the deadline,
+transitions to `dead` without another outbound request. Both `dead` and
+`succeeded` are terminal for ordering, so a dead earlier event unblocks the
+next sequence.
 The payload is stored as text so the bytes signed by NotifyRail are the bytes
 sent over HTTP.
 

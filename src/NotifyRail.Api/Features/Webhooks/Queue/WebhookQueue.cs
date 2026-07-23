@@ -14,6 +14,7 @@ public sealed class WebhookQueue
     private readonly TimeSpan _minimumRetryDelay;
     private readonly TimeSpan _maximumRetryDelay;
     private readonly double _jitterRatio;
+    private readonly TimeSpan _automaticRetryWindow;
     private readonly TimeSpan _claimTimeout;
 
     public WebhookQueue(
@@ -40,6 +41,10 @@ public sealed class WebhookQueue
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Jitter ratio must be between zero and one.");
         }
+        if (value.AutomaticRetryWindow <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Automatic retry window must be positive.");
+        }
         if (value.ClaimTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Claim timeout must be positive.");
@@ -60,6 +65,7 @@ public sealed class WebhookQueue
         _minimumRetryDelay = value.MinimumRetryDelay;
         _maximumRetryDelay = value.MaximumRetryDelay;
         _jitterRatio = value.JitterRatio;
+        _automaticRetryWindow = value.AutomaticRetryWindow;
         _claimTimeout = value.ClaimTimeout;
     }
 
@@ -81,6 +87,25 @@ public sealed class WebhookQueue
         workerId = workerId.Trim();
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         var staleBefore = claimTime.Subtract(_claimTimeout);
+        await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            UPDATE webhook_events
+            SET
+                status = 'dead',
+                next_attempt_at = NULL,
+                claimed_at = NULL,
+                claimed_by = NULL,
+                updated_at = {claimTime}
+            WHERE automatic_attempt_deadline_at <= {claimTime}
+                AND (
+                    status = 'retry_scheduled'
+                    OR (
+                        status = 'processing'
+                        AND claimed_at <= {staleBefore}
+                    )
+                )
+            """,
+            cancellationToken);
         var rows = await _dbContext.Database.SqlQuery<ClaimedWebhookRow>(
             $"""
             WITH due AS (
@@ -101,7 +126,7 @@ public sealed class WebhookQueue
                         FROM webhook_events AS earlier
                         WHERE earlier.delivery_id = candidate.delivery_id
                             AND earlier.sequence < candidate.sequence
-                            AND earlier.status NOT IN ('succeeded', 'failed')
+                            AND earlier.status NOT IN ('succeeded', 'dead')
                     )
                 ORDER BY candidate.created_at, candidate.id
                 FOR UPDATE SKIP LOCKED
@@ -111,6 +136,10 @@ public sealed class WebhookQueue
                 SET
                     status = 'processing',
                     next_attempt_at = NULL,
+                    automatic_attempt_deadline_at =
+                        COALESCE(
+                            webhook_events.automatic_attempt_deadline_at,
+                            {claimTime} + {_automaticRetryWindow}),
                     claimed_at = {claimTime},
                     claimed_by = {workerId},
                     updated_at = {claimTime}
@@ -244,15 +273,15 @@ public sealed class WebhookQueue
         var outcome = ToDatabaseValue(result.Outcome);
         var succeeded = result.Outcome == WebhookOutcome.Succeeded;
         var retryable = result.Outcome == WebhookOutcome.RetryableFailure;
-        var eventStatus = result.Outcome switch
+        if (result.Outcome is not (
+            WebhookOutcome.Succeeded
+            or WebhookOutcome.RetryableFailure
+            or WebhookOutcome.PermanentFailure))
         {
-            WebhookOutcome.Succeeded => "succeeded",
-            WebhookOutcome.RetryableFailure => "retry_scheduled",
-            WebhookOutcome.PermanentFailure => "failed",
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(result), result.Outcome, "Unknown webhook outcome."),
-        };
-        var nextAttemptAt = retryable
+            throw new ArgumentOutOfRangeException(
+                nameof(result), result.Outcome, "Unknown webhook outcome.");
+        }
+        var retryAt = retryable
             ? completedAt.Add(RetryDelay(claim.AttemptNumber, result.RetryAfter, completedAt))
             : (DateTimeOffset?)null;
 
@@ -285,9 +314,20 @@ public sealed class WebhookQueue
             $"""
             UPDATE webhook_events
             SET
-                status = {eventStatus},
+                status = CASE
+                    WHEN {succeeded} THEN 'succeeded'
+                    WHEN {retryable}
+                        AND {retryAt}::timestamptz < automatic_attempt_deadline_at
+                        THEN 'retry_scheduled'
+                    ELSE 'dead'
+                END,
                 attempt_count = {claim.AttemptNumber},
-                next_attempt_at = {nextAttemptAt},
+                next_attempt_at = CASE
+                    WHEN {retryable}
+                        AND {retryAt}::timestamptz < automatic_attempt_deadline_at
+                        THEN {retryAt}::timestamptz
+                    ELSE NULL
+                END,
                 claimed_at = NULL,
                 claimed_by = NULL,
                 succeeded_at = CASE WHEN {succeeded} THEN {completedAt}::timestamptz ELSE NULL END,

@@ -2,6 +2,7 @@ using System.Net;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NotifyRail.Api.Features.ApiClients.CreateApiClient;
 using NotifyRail.Api.Features.Deliveries.Queue;
+using NotifyRail.Api.Features.Deliveries.ProviderCallbacks.Mock;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
 using NotifyRail.Api.Features.Webhooks.RotateWebhookSecret;
@@ -191,8 +193,8 @@ public sealed class WebhookWorkerIntegrationTests
     }
 
     [Theory]
-    [InlineData(HttpStatusCode.MovedPermanently, "failed", "permanent_failure")]
-    [InlineData(HttpStatusCode.BadRequest, "failed", "permanent_failure")]
+    [InlineData(HttpStatusCode.MovedPermanently, "dead", "permanent_failure")]
+    [InlineData(HttpStatusCode.BadRequest, "dead", "permanent_failure")]
     [InlineData(HttpStatusCode.RequestTimeout, "retry_scheduled", "retryable_failure")]
     [InlineData(HttpStatusCode.TooManyRequests, "retry_scheduled", "retryable_failure")]
     [InlineData(HttpStatusCode.ServiceUnavailable, "retry_scheduled", "retryable_failure")]
@@ -244,7 +246,7 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.Equal(1, processed);
         Assert.Equal(1, redirectingEndpoint.ReceivedCount);
         Assert.Equal(0, destination.ReceivedCount);
-        Assert.Equal("failed", state.EventStatus);
+        Assert.Equal("dead", state.EventStatus);
         Assert.Equal("permanent_failure", state.AttemptOutcome);
         Assert.Equal((int)HttpStatusCode.TemporaryRedirect, state.HttpStatusCode);
     }
@@ -424,6 +426,165 @@ public sealed class WebhookWorkerIntegrationTests
         Assert.Equal(1, processed);
         Assert.Equal(2, secondState.AttemptCount);
         Assert.Equal(secondCompletedAt.AddSeconds(20), secondState.NextAttemptAt);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_StopsAutomaticRetriesAtConfiguredWindowAndMarksEventDead()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.ServiceUnavailable);
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var firstAttemptedAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var firstCompletedAt = firstAttemptedAt.AddSeconds(1);
+        var options = Options.Create(new WebhookWorkerOptions
+        {
+            WorkerId = "retry-window-worker",
+            BaseRetryDelay = TimeSpan.FromMinutes(30),
+            MinimumRetryDelay = TimeSpan.FromMinutes(30),
+            MaximumRetryDelay = TimeSpan.FromMinutes(30),
+            AutomaticRetryWindow = TimeSpan.FromHours(1),
+            JitterRatio = 0,
+        });
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = new WebhookQueue(
+            scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            options,
+            new FixedWebhookRetryJitter(0.5));
+        var firstWorker = new WebhookWorker(
+            queue,
+            scope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            options,
+            new SequenceTimeProvider(firstAttemptedAt, firstCompletedAt));
+
+        Assert.Equal(1, await firstWorker.ProcessBatchAsync(
+            firstAttemptedAt,
+            CancellationToken.None));
+        var firstState = await LoadWebhookEventStateAsync();
+        var retryAt = Assert.IsType<DateTimeOffset>(firstState.NextAttemptAt);
+        Assert.Equal(firstAttemptedAt.AddHours(1), firstState.AutomaticAttemptDeadlineAt);
+
+        var secondCompletedAt = retryAt.AddSeconds(1);
+        var secondWorker = new WebhookWorker(
+            queue,
+            scope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            options,
+            new SequenceTimeProvider(retryAt, secondCompletedAt));
+
+        Assert.Equal(1, await secondWorker.ProcessBatchAsync(
+            retryAt,
+            CancellationToken.None));
+
+        var deadState = await LoadWebhookEventStateAsync();
+        Assert.Equal("dead", deadState.Status);
+        Assert.Equal(2, deadState.AttemptCount);
+        Assert.Null(deadState.NextAttemptAt);
+        Assert.Equal(firstAttemptedAt.AddHours(1), deadState.AutomaticAttemptDeadlineAt);
+        Assert.Equal(2, receiver.ReceivedCount);
+    }
+
+    [Fact]
+    public async Task ClaimDueAsync_DefaultsAutomaticDeadlineToTwentyFourHoursFromFirstEligibleDispatch()
+    {
+        await ResetDatabaseAsync();
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(
+            "http://127.0.0.1:1/webhooks");
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        var firstEligibleDispatch = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = new WebhookQueue(
+            scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            Options.Create(new WebhookWorkerOptions()),
+            new FixedWebhookRetryJitter(0.5));
+
+        Assert.Single(await queue.ClaimDueAsync(
+            "default-retry-window-worker",
+            1,
+            firstEligibleDispatch,
+            CancellationToken.None));
+
+        var state = await LoadWebhookEventStateAsync();
+        Assert.Equal(
+            firstEligibleDispatch.AddHours(24),
+            state.AutomaticAttemptDeadlineAt);
+    }
+
+    [Fact]
+    public async Task ProcessBatchAsync_DeadEarlierEventUnblocksLaterEventWithoutAnotherAutomaticAttempt()
+    {
+        await ResetDatabaseAsync();
+        await using var receiver = await TestWebhookReceiver.StartAsync(
+            HttpStatusCode.NoContent,
+            statusResolver: webhook => EventSequence(webhook.Body) == 1
+                ? HttpStatusCode.ServiceUnavailable
+                : HttpStatusCode.NoContent);
+        var (apiClientId, _) = await CreateApiClientWithEndpointAsync(receiver.Url);
+        await CreateMessageAsync(apiClientId);
+        await RecordAcceptedDeliveryAsync();
+        await RecordDeliveredCallbackAsync();
+        var firstAttemptedAt = TruncateToMicroseconds(DateTimeOffset.UtcNow);
+        var firstCompletedAt = firstAttemptedAt.AddSeconds(1);
+        var options = Options.Create(new WebhookWorkerOptions
+        {
+            WorkerId = "dead-event-ordering-worker",
+            BaseRetryDelay = TimeSpan.FromMinutes(30),
+            MinimumRetryDelay = TimeSpan.FromMinutes(30),
+            MaximumRetryDelay = TimeSpan.FromMinutes(30),
+            AutomaticRetryWindow = TimeSpan.FromHours(1),
+            JitterRatio = 0,
+        });
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var queue = new WebhookQueue(
+            scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>(),
+            options,
+            new FixedWebhookRetryJitter(0.5));
+        var firstWorker = new WebhookWorker(
+            queue,
+            scope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            options,
+            new SequenceTimeProvider(firstAttemptedAt, firstCompletedAt));
+
+        Assert.Equal(1, await firstWorker.ProcessBatchAsync(
+            firstAttemptedAt,
+            CancellationToken.None));
+
+        var deadline = firstAttemptedAt.AddHours(1);
+        var deadlineWorker = new WebhookWorker(
+            queue,
+            scope.ServiceProvider.GetRequiredService<WebhookDispatcher>(),
+            options,
+            new SequenceTimeProvider(deadline, deadline.AddSeconds(1)));
+
+        Assert.Equal(1, await deadlineWorker.ProcessBatchAsync(
+            deadline,
+            CancellationToken.None));
+        Assert.Equal(0, await deadlineWorker.ProcessBatchAsync(
+            deadline.AddSeconds(2),
+            CancellationToken.None));
+
+        var received = await receiver.WaitForCountAsync(2);
+        Assert.Equal([1, 2], received.Select(webhook => EventSequence(webhook.Body)));
+        var states = await LoadWebhookEventStatesAsync();
+        Assert.Collection(
+            states,
+            first =>
+            {
+                Assert.Equal(1, first.Sequence);
+                Assert.Equal("dead", first.Status);
+                Assert.Equal(1, first.AttemptCount);
+            },
+            second =>
+            {
+                Assert.Equal(2, second.Sequence);
+                Assert.Equal("succeeded", second.Status);
+                Assert.Equal(1, second.AttemptCount);
+            });
     }
 
     [Fact]
@@ -1006,6 +1167,16 @@ public sealed class WebhookWorkerIntegrationTests
         await RecordAcceptedDeliveriesAsync(count: 1);
     }
 
+    private async Task RecordDeliveredCallbackAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var handler = scope.ServiceProvider.GetRequiredService<MockProviderCallbackHandler>();
+        Assert.NotNull(await handler.ApplyAsync(
+            "provider-message-1",
+            "delivered",
+            CancellationToken.None));
+    }
+
     private async Task RecordAcceptedDeliveriesAsync(int count)
     {
         await using var scope = _factory.Services.CreateAsyncScope();
@@ -1076,9 +1247,25 @@ public sealed class WebhookWorkerIntegrationTests
             SELECT
                 status AS "Status",
                 attempt_count AS "AttemptCount",
-                next_attempt_at AS "NextAttemptAt"
+                next_attempt_at AS "NextAttemptAt",
+                automatic_attempt_deadline_at AS "AutomaticAttemptDeadlineAt"
             FROM webhook_events
             """).SingleAsync(CancellationToken.None);
+    }
+
+    private async Task<IReadOnlyList<OrderedWebhookEventState>> LoadWebhookEventStatesAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<NotifyRailDbContext>();
+        return await dbContext.Database.SqlQueryRaw<OrderedWebhookEventState>(
+            """
+            SELECT
+                sequence AS "Sequence",
+                status AS "Status",
+                attempt_count AS "AttemptCount"
+            FROM webhook_events
+            ORDER BY sequence
+            """).ToListAsync(CancellationToken.None);
     }
 
     private async Task<AmbiguousDispatchState> LoadAmbiguousDispatchStateAsync()
@@ -1103,6 +1290,15 @@ public sealed class WebhookWorkerIntegrationTests
         var content = Encoding.UTF8.GetBytes($"{timestamp}.{body}");
         var hash = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), content);
         return $"v1={Convert.ToHexStringLower(hash)}";
+    }
+
+    private static int EventSequence(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement
+            .GetProperty("data")
+            .GetProperty("sequence")
+            .GetInt32();
     }
 
     private static async Task<HttpResponseMessage> SendSignedWebhookAsync(
@@ -1144,6 +1340,7 @@ public sealed class WebhookWorkerIntegrationTests
         public string Status { get; init; } = null!;
         public int AttemptCount { get; init; }
         public DateTimeOffset? NextAttemptAt { get; init; }
+        public DateTimeOffset? AutomaticAttemptDeadlineAt { get; init; }
     }
 
     private sealed class AmbiguousDispatchState
@@ -1153,6 +1350,13 @@ public sealed class WebhookWorkerIntegrationTests
         public string FirstOutcome { get; init; } = null!;
         public string SecondOutcome { get; init; } = null!;
         public string EventStatus { get; init; } = null!;
+    }
+
+    private sealed class OrderedWebhookEventState
+    {
+        public int Sequence { get; init; }
+        public string Status { get; init; } = null!;
+        public int AttemptCount { get; init; }
     }
 
     private static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value)

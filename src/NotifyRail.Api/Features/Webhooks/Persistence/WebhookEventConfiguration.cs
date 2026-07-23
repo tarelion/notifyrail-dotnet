@@ -18,7 +18,7 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
             table.HasCheckConstraint("webhook_events_payload_check", "btrim(payload) <> ''");
             table.HasCheckConstraint(
                 "webhook_events_status_check",
-                "status IN ('pending', 'processing', 'retry_scheduled', 'succeeded', 'failed')");
+                "status IN ('pending', 'processing', 'retry_scheduled', 'succeeded', 'dead')");
             table.HasCheckConstraint("webhook_events_attempt_count_check", "attempt_count >= 0");
             table.HasCheckConstraint(
                 "webhook_events_retry_schedule_check",
@@ -52,6 +52,8 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
         builder.Property(webhookEvent => webhookEvent.AttemptCount).HasColumnName("attempt_count");
         builder.Property(webhookEvent => webhookEvent.NextAttemptAt)
             .HasColumnName("next_attempt_at").HasColumnType("timestamp with time zone");
+        builder.Property(webhookEvent => webhookEvent.AutomaticAttemptDeadlineAt)
+            .HasColumnName("automatic_attempt_deadline_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.ClaimedAt)
             .HasColumnName("claimed_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.ClaimedBy)
