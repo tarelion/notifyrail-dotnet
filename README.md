@@ -93,6 +93,9 @@ retryable, and permanent failure paths easy to demonstrate.
 | `GET /management/api-clients/{id}/webhook-endpoint` | Inspect the latest Webhook Endpoint without revealing its secret |
 | `POST /management/api-clients/{id}/webhook-endpoint/disable` | Disable the active Webhook Endpoint without disabling its API Client |
 | `POST /management/api-clients/{id}/webhook-secret/rotate` | Rotate the Webhook Secret and return the new value once |
+| `GET /management/webhook-events/dead` | List Dead Webhook Events |
+| `GET /management/webhook-events/{id}` | Inspect one Dead Webhook Event and its attempts |
+| `POST /management/webhook-events/{id}/replay` | Replay one Dead Webhook Event without changing Delivery truth |
 | `GET /api-client` | Validate an API Key and return its API Client identity |
 | `POST /messages` | Idempotent message and delivery creation |
 | `GET /messages/{message_id}` | Message metadata and delivery status counts |
@@ -292,7 +295,7 @@ docker compose down -v
 | `src/NotifyRail.Api/Features/Messages` | Message intake, summaries, delivery reads, and reports |
 | `src/NotifyRail.Api/Features/Deliveries` | Delivery persistence, queue claiming, provider adapter, callbacks, and worker |
 | `src/NotifyRail.Api/Features/Otp` | OTP send, hashing, challenge persistence, and verification |
-| `src/NotifyRail.Api/Features/Webhooks` | Webhook Endpoint management, transactional outbox, signed dispatch, queue claiming, and worker processing |
+| `src/NotifyRail.Api/Features/Webhooks` | Webhook Endpoint and Dead Webhook Event management, transactional outbox, signed dispatch, queue claiming, and worker processing |
 | `src/NotifyRail.Api/Infrastructure/Persistence` | EF Core DbContext and migrations |
 | `tests/NotifyRail.Api.Tests` | xUnit integration and unit tests |
 | `docs/reference` | Canonical implemented contracts |

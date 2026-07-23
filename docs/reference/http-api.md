@@ -14,6 +14,9 @@ routes belong in the [PRD](../prd-notifyrail.md) until they are implemented.
   `src/NotifyRail.Api/Features/Webhooks/RegisterWebhookEndpoint`,
   `src/NotifyRail.Api/Features/Webhooks/InspectWebhookEndpoint`, and
   `src/NotifyRail.Api/Features/Webhooks/DisableWebhookEndpoint`
+- Dead Webhook Event inspection and replay:
+  `src/NotifyRail.Api/Features/Webhooks/InspectDeadWebhookEvent` and
+  `src/NotifyRail.Api/Features/Webhooks/ReplayDeadWebhookEvent`
 - Message endpoint: `src/NotifyRail.Api/Features/Messages/CreateMessage`
 - Message intake rules: `MessageIntake` and `CreateMessageRequestNormalizer`
 - Message summary endpoint:
@@ -329,6 +332,126 @@ returns either plaintext secret or protected secret material.
 | `201 Created` | A new current Webhook Secret is created. |
 | `401 Unauthorized` | The Operator credential is missing or invalid. |
 | `404 Not Found` | The API Client or its initial Webhook Secret does not exist. |
+
+## `GET /management/webhook-events/dead`
+
+Lists Dead Webhook Events newest-first by their latest dispatch-state change.
+Requires the `Operator` policy. Pending, processing, retry-scheduled, and
+successful events are excluded.
+
+```json
+{
+  "webhook_events": [
+    {
+      "webhook_event_id": "90ce24d4-fb25-4bc3-96a2-b2a76f809ceb",
+      "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+      "message_id": "9222034f-1d59-4114-b7d0-af458308bf66",
+      "delivery_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
+      "type": "delivery.sent",
+      "version": 1,
+      "sequence": 1,
+      "occurred_at": "2026-07-22T12:00:00Z",
+      "status": "dead",
+      "attempt_count": 4,
+      "automatic_attempt_deadline_at": "2026-07-23T12:00:00Z",
+      "created_at": "2026-07-22T12:00:00Z",
+      "updated_at": "2026-07-23T12:00:00Z"
+    }
+  ]
+}
+```
+
+The response contains event and ownership identifiers but omits the Webhook
+Endpoint URL, exact event payload, Webhook Secret, and protected signing
+material.
+
+| Status | Condition |
+| --- | --- |
+| `200 OK` | The list is returned; it may be empty. |
+| `401 Unauthorized` | The Operator credential is missing or invalid, including when an API Key is supplied instead. |
+
+## `GET /management/webhook-events/{webhook_event_id}`
+
+Inspects one Dead Webhook Event and its recorded Webhook Attempts. Requires the
+`Operator` policy. Attempts are ordered by `attempt_number`.
+
+```json
+{
+  "webhook_event_id": "90ce24d4-fb25-4bc3-96a2-b2a76f809ceb",
+  "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "message_id": "9222034f-1d59-4114-b7d0-af458308bf66",
+  "delivery_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
+  "type": "delivery.sent",
+  "version": 1,
+  "sequence": 1,
+  "occurred_at": "2026-07-22T12:00:00Z",
+  "status": "dead",
+  "attempt_count": 4,
+  "automatic_attempt_deadline_at": "2026-07-23T12:00:00Z",
+  "created_at": "2026-07-22T12:00:00Z",
+  "updated_at": "2026-07-23T12:00:00Z",
+  "attempts": [
+    {
+      "attempt_number": 4,
+      "outcome": "retryable_failure",
+      "http_status_code": 503,
+      "error_code": "http_error",
+      "error_message": "Webhook endpoint returned HTTP 503.",
+      "attempted_at": "2026-07-23T11:00:00Z",
+      "completed_at": "2026-07-23T11:00:00.125Z",
+      "latency_milliseconds": 125
+    }
+  ]
+}
+```
+
+The response omits the endpoint URL, exact event payload, response bodies, and
+all signing material. Attempt diagnostics are the bounded normalized values
+recorded by dispatch.
+
+| Status | Condition |
+| --- | --- |
+| `200 OK` | The requested Webhook Event is dead. |
+| `401 Unauthorized` | The Operator credential is missing or invalid, including when an API Key is supplied instead. |
+| `404 Not Found` | The Webhook Event does not exist or is not dead. |
+
+## `POST /management/webhook-events/{webhook_event_id}/replay`
+
+Requeues one Dead Webhook Event for manual replay. Requires the `Operator`
+policy. The operation preserves the original event ID, version, occurrence
+time, sequence, payload, Message, and Delivery identifiers. It does not update
+the Delivery or create another logical Webhook Event.
+
+Success response:
+
+- Status: `202 Accepted`
+
+```json
+{
+  "webhook_event_id": "90ce24d4-fb25-4bc3-96a2-b2a76f809ceb",
+  "api_client_id": "177b08d9-1ae3-4590-b7c6-c01c23776c8f",
+  "message_id": "9222034f-1d59-4114-b7d0-af458308bf66",
+  "delivery_id": "0241b3df-32ce-424f-a6a7-32baeb929bcb",
+  "type": "delivery.sent",
+  "version": 1,
+  "sequence": 1,
+  "occurred_at": "2026-07-22T12:00:00Z",
+  "status": "pending",
+  "replayed_at": "2026-07-23T13:00:00Z"
+}
+```
+
+The Webhook Worker creates the next Webhook Attempt when it dispatches the
+requeued event. The replay receives a fresh automatic-attempt window from its
+next eligible dispatch. Because the original sequence is preserved, a
+sequence-aware receiver can reject a replay that is older than state it has
+already accepted.
+
+| Status | Condition |
+| --- | --- |
+| `202 Accepted` | The dead event is requeued. |
+| `401 Unauthorized` | The Operator credential is missing or invalid, including when an API Key is supplied instead. |
+| `404 Not Found` | The Webhook Event does not exist or is no longer dead. |
 
 ## Webhook Secret protection configuration
 
