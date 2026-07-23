@@ -74,6 +74,7 @@ public sealed class WebhookEvent
     public int AttemptCount { get; private set; }
     public DateTimeOffset? NextAttemptAt { get; private set; }
     public DateTimeOffset? AutomaticAttemptDeadlineAt { get; private set; }
+    public DateTimeOffset? DeadAt { get; private set; }
     public DateTimeOffset? ClaimedAt { get; private set; }
     public string? ClaimedBy { get; private set; }
     public DateTimeOffset? SucceededAt { get; private set; }

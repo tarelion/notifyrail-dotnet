@@ -10,7 +10,7 @@ public sealed class DeadWebhookEventReader(NotifyRailDbContext dbContext)
     {
         var webhookEvents = await dbContext.WebhookEvents
             .AsNoTracking()
-            .Where(webhookEvent => webhookEvent.Status == "dead")
+            .Where(webhookEvent => webhookEvent.DeadAt != null)
             .OrderByDescending(webhookEvent => webhookEvent.UpdatedAt)
             .ThenByDescending(webhookEvent => webhookEvent.Id)
             .Select(webhookEvent => new DeadWebhookEventSummaryResponse(
@@ -25,6 +25,7 @@ public sealed class DeadWebhookEventReader(NotifyRailDbContext dbContext)
                 webhookEvent.Status,
                 webhookEvent.AttemptCount,
                 webhookEvent.AutomaticAttemptDeadlineAt,
+                webhookEvent.DeadAt!.Value,
                 webhookEvent.CreatedAt,
                 webhookEvent.UpdatedAt))
             .ToListAsync(cancellationToken);
@@ -40,7 +41,7 @@ public sealed class DeadWebhookEventReader(NotifyRailDbContext dbContext)
             .AsNoTracking()
             .Where(candidate =>
                 candidate.Id == webhookEventId
-                && candidate.Status == "dead")
+                && candidate.DeadAt != null)
             .Select(candidate => new DeadWebhookEventProjection(
                 candidate.Id,
                 candidate.ApiClientId,
@@ -53,6 +54,7 @@ public sealed class DeadWebhookEventReader(NotifyRailDbContext dbContext)
                 candidate.Status,
                 candidate.AttemptCount,
                 candidate.AutomaticAttemptDeadlineAt,
+                candidate.DeadAt!.Value,
                 candidate.CreatedAt,
                 candidate.UpdatedAt))
             .SingleOrDefaultAsync(cancellationToken);
@@ -88,6 +90,7 @@ public sealed class DeadWebhookEventReader(NotifyRailDbContext dbContext)
             webhookEvent.Status,
             webhookEvent.AttemptCount,
             webhookEvent.AutomaticAttemptDeadlineAt,
+            webhookEvent.DeadAt,
             webhookEvent.CreatedAt,
             webhookEvent.UpdatedAt,
             attempts);
@@ -105,6 +108,7 @@ public sealed class DeadWebhookEventReader(NotifyRailDbContext dbContext)
         string Status,
         int AttemptCount,
         DateTimeOffset? AutomaticAttemptDeadlineAt,
+        DateTimeOffset DeadAt,
         DateTimeOffset CreatedAt,
         DateTimeOffset UpdatedAt);
 }

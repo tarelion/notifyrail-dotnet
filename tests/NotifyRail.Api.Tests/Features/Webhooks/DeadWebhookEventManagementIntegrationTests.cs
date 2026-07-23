@@ -60,6 +60,7 @@ public sealed class DeadWebhookEventManagementIntegrationTests : IDisposable
         Assert.Equal(1, root.GetProperty("version").GetInt32());
         Assert.Equal(1, root.GetProperty("sequence").GetInt32());
         Assert.Equal("dead", root.GetProperty("status").GetString());
+        Assert.NotEqual(default, root.GetProperty("dead_at").GetDateTimeOffset());
         Assert.Equal(1, root.GetProperty("attempt_count").GetInt32());
         var attempt = Assert.Single(root.GetProperty("attempts").EnumerateArray());
         Assert.Equal(1, attempt.GetProperty("attempt_number").GetInt32());
@@ -133,6 +134,9 @@ public sealed class DeadWebhookEventManagementIntegrationTests : IDisposable
         Assert.Equal(before.Sequence, after.Sequence);
         Assert.Equal(before.OccurredAt, after.OccurredAt);
         Assert.Equal(before.Payload, after.Payload);
+        Assert.Equal(
+            before.AutomaticAttemptDeadlineAt,
+            after.AutomaticAttemptDeadlineAt);
         Assert.Equal(before.DeliveryStatus, after.DeliveryStatus);
         Assert.Equal(before.DeliveryUpdatedAt, after.DeliveryUpdatedAt);
         Assert.Equal(1, after.EventCount);
@@ -140,6 +144,27 @@ public sealed class DeadWebhookEventManagementIntegrationTests : IDisposable
         Assert.Equal("succeeded", after.EventStatus);
         Assert.Equal(deadEvent.EventId.ToString(), handler.EventId);
         Assert.Equal(before.Payload, handler.Body);
+
+        using var inspection = await client.GetAsync(
+            $"/management/webhook-events/{deadEvent.EventId}");
+        using var deadEvents = await client.GetAsync(
+            "/management/webhook-events/dead");
+        using var inspectionDocument = JsonDocument.Parse(
+            await inspection.Content.ReadAsStringAsync());
+        using var deadEventsDocument = JsonDocument.Parse(
+            await deadEvents.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, inspection.StatusCode);
+        Assert.Equal(
+            "succeeded",
+            inspectionDocument.RootElement.GetProperty("status").GetString());
+        Assert.NotEqual(
+            default,
+            inspectionDocument.RootElement.GetProperty("dead_at").GetDateTimeOffset());
+        Assert.Contains(
+            deadEventsDocument.RootElement
+                .GetProperty("webhook_events")
+                .EnumerateArray(),
+            item => item.GetProperty("webhook_event_id").GetGuid() == deadEvent.EventId);
     }
 
     [Fact]
@@ -364,6 +389,7 @@ public sealed class DeadWebhookEventManagementIntegrationTests : IDisposable
                 webhook_events.occurred_at AS "OccurredAt",
                 webhook_events.payload AS "Payload",
                 webhook_events.status AS "EventStatus",
+                webhook_events.automatic_attempt_deadline_at AS "AutomaticAttemptDeadlineAt",
                 deliveries.status AS "DeliveryStatus",
                 deliveries.updated_at AS "DeliveryUpdatedAt",
                 (SELECT count(*)::int FROM webhook_events) AS "EventCount",
@@ -442,6 +468,7 @@ public sealed class DeadWebhookEventManagementIntegrationTests : IDisposable
         public DateTimeOffset OccurredAt { get; init; }
         public string Payload { get; init; } = null!;
         public string EventStatus { get; init; } = null!;
+        public DateTimeOffset? AutomaticAttemptDeadlineAt { get; init; }
         public string DeliveryStatus { get; init; } = null!;
         public DateTimeOffset DeliveryUpdatedAt { get; init; }
         public int EventCount { get; init; }

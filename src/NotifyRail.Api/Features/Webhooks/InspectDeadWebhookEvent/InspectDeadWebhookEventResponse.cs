@@ -15,6 +15,7 @@ public sealed record InspectDeadWebhookEventResponse(
     [property: JsonPropertyName("attempt_count")] int AttemptCount,
     [property: JsonPropertyName("automatic_attempt_deadline_at")]
     DateTimeOffset? AutomaticAttemptDeadlineAt,
+    [property: JsonPropertyName("dead_at")] DateTimeOffset DeadAt,
     [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("updated_at")] DateTimeOffset UpdatedAt,
     [property: JsonPropertyName("attempts")]
@@ -47,5 +48,6 @@ public sealed record DeadWebhookEventSummaryResponse(
     [property: JsonPropertyName("attempt_count")] int AttemptCount,
     [property: JsonPropertyName("automatic_attempt_deadline_at")]
     DateTimeOffset? AutomaticAttemptDeadlineAt,
+    [property: JsonPropertyName("dead_at")] DateTimeOffset DeadAt,
     [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("updated_at")] DateTimeOffset UpdatedAt);

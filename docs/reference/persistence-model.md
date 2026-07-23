@@ -146,6 +146,7 @@ accepted.
 | `attempt_count` | `integer` | yes | Number of recorded Webhook Attempts; defaults to zero. |
 | `next_attempt_at` | `timestamp with time zone` | no | Required exactly while `retry_scheduled`; earliest time the event may be claimed again. |
 | `automatic_attempt_deadline_at` | `timestamp with time zone` | no | Set when the event first becomes eligible for dispatch; automatic attempts stop at this instant. |
+| `dead_at` | `timestamp with time zone` | no | First instant the event entered the Dead Webhook Event set; retained across manual replay. |
 | `claimed_at` | `timestamp with time zone` | no | Claim instant, present only while processing. |
 | `claimed_by` | `text` | no | Non-blank worker identity, present only while processing. |
 | `succeeded_at` | `timestamp with time zone` | no | Present exactly when status is `succeeded`. |
@@ -161,7 +162,10 @@ The first eligible claim fixes the automatic-attempt deadline using
 would escape that window, or a due retry first observed at the deadline,
 transitions to `dead` without another outbound request. Both `dead` and
 `succeeded` are terminal for ordering, so a dead earlier event unblocks the
-next sequence.
+next sequence. `dead_at` remains set if an operator later replays the event,
+which keeps the exhausted failure queryable while `status` continues to
+describe its current dispatch state. Replay does not reset the original
+automatic-attempt deadline.
 The payload is stored as text so the bytes signed by NotifyRail are the bytes
 sent over HTTP.
 

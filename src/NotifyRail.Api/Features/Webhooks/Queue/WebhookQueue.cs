@@ -93,6 +93,7 @@ public sealed class WebhookQueue
             SET
                 status = 'dead',
                 next_attempt_at = NULL,
+                dead_at = COALESCE(dead_at, {claimTime}),
                 claimed_at = NULL,
                 claimed_by = NULL,
                 updated_at = {claimTime}
@@ -327,6 +328,15 @@ public sealed class WebhookQueue
                         AND {retryAt}::timestamptz < automatic_attempt_deadline_at
                         THEN {retryAt}::timestamptz
                     ELSE NULL
+                END,
+                dead_at = CASE
+                    WHEN {succeeded}
+                        OR (
+                            {retryable}
+                            AND {retryAt}::timestamptz < automatic_attempt_deadline_at
+                        )
+                        THEN dead_at
+                    ELSE COALESCE(dead_at, {completedAt})
                 END,
                 claimed_at = NULL,
                 claimed_by = NULL,

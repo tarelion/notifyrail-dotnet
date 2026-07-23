@@ -41,9 +41,6 @@ public sealed class WebhookEventReplayer(NotifyRailDbContext dbContext)
                         candidate => candidate.NextAttemptAt,
                         (DateTimeOffset?)null)
                     .SetProperty(
-                        candidate => candidate.AutomaticAttemptDeadlineAt,
-                        (DateTimeOffset?)null)
-                    .SetProperty(
                         candidate => candidate.ClaimedAt,
                         (DateTimeOffset?)null)
                     .SetProperty(candidate => candidate.ClaimedBy, (string?)null)

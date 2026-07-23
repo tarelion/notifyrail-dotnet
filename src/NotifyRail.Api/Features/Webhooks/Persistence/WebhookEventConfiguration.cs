@@ -32,6 +32,9 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
                 "webhook_events_succeeded_at_check",
                 "(status = 'succeeded' AND succeeded_at IS NOT NULL) " +
                 "OR (status <> 'succeeded' AND succeeded_at IS NULL)");
+            table.HasCheckConstraint(
+                "webhook_events_dead_at_check",
+                "status <> 'dead' OR dead_at IS NOT NULL");
         });
 
         builder.HasKey(webhookEvent => webhookEvent.Id);
@@ -54,6 +57,8 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
             .HasColumnName("next_attempt_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.AutomaticAttemptDeadlineAt)
             .HasColumnName("automatic_attempt_deadline_at").HasColumnType("timestamp with time zone");
+        builder.Property(webhookEvent => webhookEvent.DeadAt)
+            .HasColumnName("dead_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.ClaimedAt)
             .HasColumnName("claimed_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.ClaimedBy)

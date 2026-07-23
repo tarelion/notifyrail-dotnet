@@ -335,9 +335,10 @@ returns either plaintext secret or protected secret material.
 
 ## `GET /management/webhook-events/dead`
 
-Lists Dead Webhook Events newest-first by their latest dispatch-state change.
-Requires the `Operator` policy. Pending, processing, retry-scheduled, and
-successful events are excluded.
+Lists events that have entered the Dead Webhook Event set, newest-first by
+their latest dispatch-state change. Requires the `Operator` policy. An event
+remains in this list after replay; `status` describes its current dispatch
+state.
 
 ```json
 {
@@ -354,6 +355,7 @@ successful events are excluded.
       "status": "dead",
       "attempt_count": 4,
       "automatic_attempt_deadline_at": "2026-07-23T12:00:00Z",
+      "dead_at": "2026-07-23T12:00:00Z",
       "created_at": "2026-07-22T12:00:00Z",
       "updated_at": "2026-07-23T12:00:00Z"
     }
@@ -388,6 +390,7 @@ Inspects one Dead Webhook Event and its recorded Webhook Attempts. Requires the
   "status": "dead",
   "attempt_count": 4,
   "automatic_attempt_deadline_at": "2026-07-23T12:00:00Z",
+  "dead_at": "2026-07-23T12:00:00Z",
   "created_at": "2026-07-22T12:00:00Z",
   "updated_at": "2026-07-23T12:00:00Z",
   "attempts": [
@@ -411,9 +414,9 @@ recorded by dispatch.
 
 | Status | Condition |
 | --- | --- |
-| `200 OK` | The requested Webhook Event is dead. |
+| `200 OK` | The requested Webhook Event has entered the dead-event set. |
 | `401 Unauthorized` | The Operator credential is missing or invalid, including when an API Key is supplied instead. |
-| `404 Not Found` | The Webhook Event does not exist or is not dead. |
+| `404 Not Found` | The Webhook Event does not exist or has never entered the dead-event set. |
 
 ## `POST /management/webhook-events/{webhook_event_id}/replay`
 
@@ -442,10 +445,11 @@ Success response:
 ```
 
 The Webhook Worker creates the next Webhook Attempt when it dispatches the
-requeued event. The replay receives a fresh automatic-attempt window from its
-next eligible dispatch. Because the original sequence is preserved, a
-sequence-aware receiver can reject a replay that is older than state it has
-already accepted.
+requeued event. Replay preserves the event's original automatic-attempt
+deadline rather than starting a fresh retry campaign. The durable `dead_at`
+also remains unchanged, so the original exhausted failure stays queryable.
+Because the original sequence is preserved, a sequence-aware receiver can
+reject a replay that is older than state it has already accepted.
 
 | Status | Condition |
 | --- | --- |
