@@ -31,6 +31,9 @@ public sealed class DeliveryConfiguration : IEntityTypeConfiguration<Delivery>
             table.HasCheckConstraint(
                 "deliveries_provider_message_id_check",
                 "provider_message_id IS NULL OR btrim(provider_message_id) <> ''");
+            table.HasCheckConstraint(
+                "deliveries_source_trace_parent_check",
+                "source_trace_parent IS NULL OR btrim(source_trace_parent) <> ''");
         });
 
         builder.HasKey(delivery => delivery.Id);
@@ -83,6 +86,10 @@ public sealed class DeliveryConfiguration : IEntityTypeConfiguration<Delivery>
         builder.Property(delivery => delivery.ExpiresAt)
             .HasColumnName("expires_at")
             .HasColumnType("timestamp with time zone");
+
+        builder.Property(delivery => delivery.SourceTraceParent)
+            .HasColumnName("source_trace_parent")
+            .HasColumnType("text");
 
         builder.Property(delivery => delivery.CreatedAt)
             .HasColumnName("created_at")

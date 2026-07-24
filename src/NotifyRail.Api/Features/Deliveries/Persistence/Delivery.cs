@@ -12,7 +12,8 @@ public sealed class Delivery
         Guid messageId,
         string recipient,
         DateTimeOffset createdAt,
-        DateTimeOffset? expiresAt = null)
+        DateTimeOffset? expiresAt = null,
+        string? sourceTraceParent = null)
     {
         return new Delivery
         {
@@ -22,6 +23,7 @@ public sealed class Delivery
             Status = "queued",
             AttemptCount = 0,
             ExpiresAt = expiresAt,
+            SourceTraceParent = sourceTraceParent,
             CreatedAt = createdAt,
             UpdatedAt = createdAt,
         };
@@ -48,6 +50,8 @@ public sealed class Delivery
     public string? ProviderMessageId { get; private set; }
 
     public DateTimeOffset? ExpiresAt { get; private set; }
+
+    public string? SourceTraceParent { get; private set; }
 
     public DateTimeOffset CreatedAt { get; private set; }
 

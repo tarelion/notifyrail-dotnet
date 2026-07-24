@@ -1,10 +1,14 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using NotifyRail.Api.Features.Webhooks.Persistence;
 using NotifyRail.Api.Infrastructure.Persistence;
+using NotifyRail.Api.Telemetry;
 
 namespace NotifyRail.Api.Features.Webhooks.Outbox;
 
-public sealed class DeliveryWebhookOutbox(NotifyRailDbContext dbContext)
+public sealed class DeliveryWebhookOutbox(
+    NotifyRailDbContext dbContext,
+    ILogger<DeliveryWebhookOutbox> logger)
 {
     public async Task CreateDeliverySentAsync(
         Guid deliveryId,
@@ -60,6 +64,9 @@ public sealed class DeliveryWebhookOutbox(NotifyRailDbContext dbContext)
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
+        using var activity = NotifyRailTelemetry.ActivitySource.StartActivity(
+            NotifyRailTelemetry.WebhookEventCreateActivity,
+            ActivityKind.Producer);
         var source = await (
             from delivery in dbContext.Deliveries
             join message in dbContext.Messages on delivery.MessageId equals message.Id
@@ -77,13 +84,26 @@ public sealed class DeliveryWebhookOutbox(NotifyRailDbContext dbContext)
 
         if (source is null)
         {
+            activity?.SetTag(NotifyRailTelemetry.OutcomeTag, "no_active_endpoint");
             return;
         }
+        activity?.SetTag(
+            NotifyRailTelemetry.ApiClientIdTag,
+            source.ApiClientId.ToString());
+        activity?.SetTag(
+            NotifyRailTelemetry.MessageIdTag,
+            source.MessageId.ToString());
+        activity?.SetTag(
+            NotifyRailTelemetry.DeliveryIdTag,
+            source.DeliveryId.ToString());
+        activity?.SetTag(
+            NotifyRailTelemetry.RecipientTag,
+            NotifyRailTelemetry.MaskRecipient(source.Recipient));
 
         var lastSequence = await dbContext.WebhookEvents
             .Where(webhookEvent => webhookEvent.DeliveryId == deliveryId)
             .MaxAsync(webhookEvent => (int?)webhookEvent.Sequence, cancellationToken) ?? 0;
-        dbContext.WebhookEvents.Add(WebhookEvent.CreateDeliveryStateChanged(
+        var webhookEvent = WebhookEvent.CreateDeliveryStateChanged(
             source.ApiClientId,
             source.WebhookEndpointId,
             source.MessageId,
@@ -91,7 +111,27 @@ public sealed class DeliveryWebhookOutbox(NotifyRailDbContext dbContext)
             source.Recipient,
             status,
             lastSequence + 1,
-            occurredAt));
+            occurredAt,
+            NotifyRailTelemetry.CaptureCurrentTraceParent());
+        dbContext.WebhookEvents.Add(webhookEvent);
         await dbContext.SaveChangesAsync(cancellationToken);
+        activity?.SetTag(
+            NotifyRailTelemetry.WebhookEventIdTag,
+            webhookEvent.Id.ToString());
+        activity?.SetTag(
+            NotifyRailTelemetry.WebhookEventTypeTag,
+            webhookEvent.Type);
+        activity?.SetTag(NotifyRailTelemetry.OutcomeTag, "created");
+        logger.LogInformation(
+            "Created Webhook Event {notifyrail.webhook_event.id} for Delivery " +
+            "{notifyrail.delivery.id}, Message {notifyrail.message.id}, and API Client " +
+            "{notifyrail.api_client.id} with type {notifyrail.webhook_event.type} " +
+            "for {notifyrail.recipient.masked}",
+            webhookEvent.Id,
+            source.DeliveryId,
+            source.MessageId,
+            source.ApiClientId,
+            webhookEvent.Type,
+            NotifyRailTelemetry.MaskRecipient(source.Recipient));
     }
 }

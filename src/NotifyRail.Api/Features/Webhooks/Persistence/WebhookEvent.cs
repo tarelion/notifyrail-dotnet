@@ -17,7 +17,8 @@ public sealed class WebhookEvent
         string recipient,
         DeliveryWebhookEventStatus status,
         int sequence,
-        DateTimeOffset occurredAt)
+        DateTimeOffset occurredAt,
+        string? sourceTraceParent)
     {
         var statusValue = status switch
         {
@@ -53,6 +54,7 @@ public sealed class WebhookEvent
             Sequence = sequence,
             OccurredAt = occurredAt,
             Payload = payload,
+            SourceTraceParent = sourceTraceParent,
             Status = "pending",
             AttemptCount = 0,
             CreatedAt = occurredAt,
@@ -70,6 +72,7 @@ public sealed class WebhookEvent
     public int Sequence { get; private set; }
     public DateTimeOffset OccurredAt { get; private set; }
     public string Payload { get; private set; } = null!;
+    public string? SourceTraceParent { get; private set; }
     public string Status { get; private set; } = null!;
     public int AttemptCount { get; private set; }
     public DateTimeOffset? NextAttemptAt { get; private set; }

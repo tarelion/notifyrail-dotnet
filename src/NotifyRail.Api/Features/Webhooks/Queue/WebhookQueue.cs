@@ -150,6 +150,9 @@ public sealed class WebhookQueue
                     webhook_events.id,
                     webhook_events.webhook_endpoint_id,
                     webhook_events.api_client_id,
+                    webhook_events.message_id,
+                    webhook_events.delivery_id,
+                    webhook_events.source_trace_parent,
                     webhook_events.payload,
                     webhook_events.attempt_count,
                     webhook_events.created_at
@@ -157,6 +160,9 @@ public sealed class WebhookQueue
             SELECT
                 claimed.id AS "EventId",
                 claimed.api_client_id AS "ApiClientId",
+                claimed.message_id AS "MessageId",
+                claimed.delivery_id AS "DeliveryId",
+                claimed.source_trace_parent AS "SourceTraceParent",
                 webhook_endpoints.url AS "EndpointUrl",
                 claimed.payload AS "Body",
                 claimed.attempt_count AS "AttemptCount"
@@ -203,9 +209,12 @@ public sealed class WebhookQueue
             new WebhookRequest(
                 row.EventId,
                 row.ApiClientId,
+                row.MessageId,
+                row.DeliveryId,
                 row.EndpointUrl,
                 row.Body,
-                protectedSecrets[row.ApiClientId])))
+                protectedSecrets[row.ApiClientId],
+                row.SourceTraceParent)))
             .ToArray();
     }
 
@@ -260,7 +269,7 @@ public sealed class WebhookQueue
         }
     }
 
-    public async Task RecordResultAsync(
+    public async Task<WebhookRecordResult> RecordResultAsync(
         WebhookClaim claim,
         WebhookResult result,
         DateTimeOffset attemptedAt,
@@ -287,7 +296,7 @@ public sealed class WebhookQueue
             : (DateTimeOffset?)null;
 
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-        var recorded = await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+        var webhookAttemptIds = await _dbContext.Database.SqlQuery<Guid>(
             $"""
             INSERT INTO webhook_attempts (
                 webhook_event_id, attempt_number, outcome, http_status_code,
@@ -304,14 +313,16 @@ public sealed class WebhookQueue
                     AND attempt_count = {claim.AttemptNumber} - 1
                 FOR UPDATE
             ) AS candidate
-            """,
-            cancellationToken);
-        if (recorded == 0)
+            RETURNING id AS "Value"
+            """)
+            .ToListAsync(cancellationToken);
+        var webhookAttemptId = webhookAttemptIds.SingleOrDefault();
+        if (webhookAttemptId == Guid.Empty)
         {
             throw new InvalidOperationException("Webhook claim is stale.");
         }
 
-        await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+        var eventStatuses = await _dbContext.Database.SqlQuery<string>(
             $"""
             UPDATE webhook_events
             SET
@@ -343,9 +354,12 @@ public sealed class WebhookQueue
                 succeeded_at = CASE WHEN {succeeded} THEN {completedAt}::timestamptz ELSE NULL END,
                 updated_at = {completedAt}
             WHERE id = {claim.EventId}
-            """,
-            cancellationToken);
+            RETURNING status AS "Value"
+            """)
+            .ToListAsync(cancellationToken);
+        var eventStatus = eventStatuses.Single();
         await transaction.CommitAsync(cancellationToken);
+        return new WebhookRecordResult(webhookAttemptId, eventStatus);
     }
 
     private static string? Bound(string? value, int maximumLength)
@@ -413,6 +427,9 @@ public sealed class WebhookQueue
     {
         public Guid EventId { get; init; }
         public Guid ApiClientId { get; init; }
+        public Guid MessageId { get; init; }
+        public Guid DeliveryId { get; init; }
+        public string? SourceTraceParent { get; init; }
         public string EndpointUrl { get; init; } = null!;
         public string Body { get; init; } = null!;
         public int AttemptCount { get; init; }

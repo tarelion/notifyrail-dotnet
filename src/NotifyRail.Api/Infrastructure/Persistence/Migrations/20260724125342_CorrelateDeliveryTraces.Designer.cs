@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NotifyRail.Api.Infrastructure.Persistence;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(NotifyRailDbContext))]
-    partial class NotifyRailDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260724125342_CorrelateDeliveryTraces")]
+    partial class CorrelateDeliveryTraces
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -633,10 +636,6 @@ namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("sequence");
 
-                    b.Property<string>("SourceTraceParent")
-                        .HasColumnType("text")
-                        .HasColumnName("source_trace_parent");
-
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text")
@@ -691,8 +690,6 @@ namespace NotifyRail.Api.Infrastructure.Persistence.Migrations
                             t.HasCheckConstraint("webhook_events_retry_schedule_check", "(status = 'retry_scheduled' AND next_attempt_at IS NOT NULL) OR (status <> 'retry_scheduled' AND next_attempt_at IS NULL)");
 
                             t.HasCheckConstraint("webhook_events_sequence_check", "sequence > 0");
-
-                            t.HasCheckConstraint("webhook_events_source_trace_parent_check", "source_trace_parent IS NULL OR btrim(source_trace_parent) <> ''");
 
                             t.HasCheckConstraint("webhook_events_status_check", "status IN ('pending', 'processing', 'retry_scheduled', 'succeeded', 'dead')");
 

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -5,6 +6,7 @@ using NotifyRail.Api.Features.Deliveries.Persistence;
 using NotifyRail.Api.Features.Messages.Persistence;
 using NotifyRail.Api.Features.Otp.Persistence;
 using NotifyRail.Api.Infrastructure.Persistence;
+using NotifyRail.Api.Telemetry;
 
 namespace NotifyRail.Api.Features.Otp.SendOtp;
 
@@ -12,7 +14,8 @@ public sealed class OtpSender(
     NotifyRailDbContext dbContext,
     OtpCode otpCode,
     IOptions<OtpOptions> options,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ILogger<OtpSender> logger)
 {
     private const string MessageBody = "Your verification code is ready.";
     private const string IdempotencyKeyUniqueConstraint =
@@ -24,6 +27,15 @@ public sealed class OtpSender(
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
+        using var activity = NotifyRailTelemetry.ActivitySource.StartActivity(
+            NotifyRailTelemetry.MessageIntakeActivity,
+            ActivityKind.Producer);
+        activity?.SetTag(
+            NotifyRailTelemetry.ApiClientIdTag,
+            apiClientId.ToString());
+        activity?.SetTag(
+            NotifyRailTelemetry.RecipientTag,
+            NotifyRailTelemetry.MaskRecipient(recipient));
         var createdAt = PostgresTimestamp.Normalize(timeProvider.GetUtcNow());
         var expiresAt = createdAt.Add(options.Value.Ttl);
         var challengeId = Guid.NewGuid();
@@ -41,7 +53,12 @@ public sealed class OtpSender(
             message.Id,
             recipient,
             createdAt,
-            expiresAt);
+            expiresAt,
+            NotifyRailTelemetry.CaptureCurrentTraceParent());
+        activity?.SetTag(
+            NotifyRailTelemetry.MessageIdTag,
+            message.Id.ToString());
+        activity?.SetTag(NotifyRailTelemetry.DeliveryCountTag, 1);
         var challenge = OtpChallenge.Create(
             challengeId,
             message.Id,
@@ -74,6 +91,14 @@ public sealed class OtpSender(
                 cancellationToken);
         }
 
+        logger.LogInformation(
+            "Accepted OTP Message {notifyrail.message.id} for API Client " +
+            "{notifyrail.api_client.id} with {notifyrail.delivery.count} Delivery " +
+            "for {notifyrail.recipient.masked}",
+            message.Id,
+            apiClientId,
+            1,
+            NotifyRailTelemetry.MaskRecipient(recipient));
         return SendOtpOutcome.Accepted(new SendOtpResponse(
             challenge.Id,
             message.Id,

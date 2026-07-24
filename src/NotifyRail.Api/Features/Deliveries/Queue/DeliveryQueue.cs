@@ -155,12 +155,16 @@ public sealed class DeliveryQueue
                         deliveries.id,
                         deliveries.message_id,
                         deliveries.recipient,
+                        deliveries.source_trace_parent,
                         deliveries.attempt_count,
                         deliveries.created_at
                 )
                 SELECT
                     claimed.id AS "DeliveryId",
+                    claimed.message_id AS "MessageId",
+                    messages.api_client_id AS "ApiClientId",
                     claimed.recipient AS "Recipient",
+                    claimed.source_trace_parent AS "SourceTraceParent",
                     messages.channel AS "Channel",
                     messages.sender_title AS "SenderTitle",
                     messages.body AS "Body",
@@ -334,7 +338,10 @@ public sealed class DeliveryQueue
                 row.Channel,
                 row.SenderTitle,
                 row.Body,
-                attemptNumber));
+                attemptNumber),
+            row.ApiClientId,
+            row.MessageId,
+            row.SourceTraceParent);
     }
 
     private static string ToDatabaseValue(ProviderOutcome outcome)
@@ -367,7 +374,13 @@ public sealed class DeliveryQueue
     {
         public Guid DeliveryId { get; init; }
 
+        public Guid ApiClientId { get; init; }
+
+        public Guid MessageId { get; init; }
+
         public string Recipient { get; init; } = null!;
+
+        public string? SourceTraceParent { get; init; }
 
         public string Channel { get; init; } = null!;
 

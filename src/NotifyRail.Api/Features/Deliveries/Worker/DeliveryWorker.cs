@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 using NotifyRail.Api.Features.Deliveries.Providers;
 using NotifyRail.Api.Features.Deliveries.Queue;
+using NotifyRail.Api.Telemetry;
 
 namespace NotifyRail.Api.Features.Deliveries.Worker;
 
@@ -65,13 +67,45 @@ public sealed class DeliveryWorker
         var processed = 0;
         foreach (var job in jobs)
         {
+            using var activity = NotifyRailTelemetry.StartLinkedActivity(
+                NotifyRailTelemetry.DeliveryProcessActivity,
+                ActivityKind.Consumer,
+                job.SourceTraceParent);
+            activity?.SetTag(
+                NotifyRailTelemetry.ApiClientIdTag,
+                job.ApiClientId.ToString());
+            activity?.SetTag(
+                NotifyRailTelemetry.MessageIdTag,
+                job.MessageId.ToString());
+            activity?.SetTag(
+                NotifyRailTelemetry.DeliveryIdTag,
+                job.Claim.DeliveryId.ToString());
+            activity?.SetTag(
+                NotifyRailTelemetry.DeliveryAttemptNumberTag,
+                job.Claim.AttemptNumber);
+            activity?.SetTag(
+                NotifyRailTelemetry.RecipientTag,
+                NotifyRailTelemetry.MaskRecipient(job.Request.Recipient));
+
             var result = await SendAsync(job, cancellationToken);
+            activity?.SetTag(NotifyRailTelemetry.OutcomeTag, result.Outcome.ToString());
 
             await _queue.RecordProviderResultAsync(
                 job.Claim,
                 result,
                 _timeProvider.GetUtcNow(),
                 cancellationToken);
+            _logger.LogInformation(
+                "Processed Delivery {notifyrail.delivery.id} for Message " +
+                "{notifyrail.message.id} and API Client {notifyrail.api_client.id} " +
+                "attempt {notifyrail.delivery_attempt.number} as {notifyrail.outcome} " +
+                "for {notifyrail.recipient.masked}",
+                job.Claim.DeliveryId,
+                job.MessageId,
+                job.ApiClientId,
+                job.Claim.AttemptNumber,
+                result.Outcome,
+                NotifyRailTelemetry.MaskRecipient(job.Request.Recipient));
             processed++;
         }
 

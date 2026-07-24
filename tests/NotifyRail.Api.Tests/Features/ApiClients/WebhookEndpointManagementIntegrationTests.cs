@@ -595,9 +595,12 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
             new WebhookRequest(
                 Guid.NewGuid(),
                 apiClient.ApiClientId,
+                Guid.NewGuid(),
+                Guid.NewGuid(),
                 url,
                 "{}",
-                protector.Protect("nrs_test-secret")),
+                protector.Protect("nrs_test-secret"),
+                SourceTraceParent: null),
             DateTimeOffset.UtcNow,
             CancellationToken.None);
 

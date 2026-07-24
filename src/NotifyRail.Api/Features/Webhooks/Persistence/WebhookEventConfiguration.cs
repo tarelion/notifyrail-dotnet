@@ -17,6 +17,9 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
             table.HasCheckConstraint("webhook_events_sequence_check", "sequence > 0");
             table.HasCheckConstraint("webhook_events_payload_check", "btrim(payload) <> ''");
             table.HasCheckConstraint(
+                "webhook_events_source_trace_parent_check",
+                "source_trace_parent IS NULL OR btrim(source_trace_parent) <> ''");
+            table.HasCheckConstraint(
                 "webhook_events_status_check",
                 "status IN ('pending', 'processing', 'retry_scheduled', 'succeeded', 'dead')");
             table.HasCheckConstraint("webhook_events_attempt_count_check", "attempt_count >= 0");
@@ -50,6 +53,8 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
             .HasColumnName("occurred_at").HasColumnType("timestamp with time zone");
         builder.Property(webhookEvent => webhookEvent.Payload)
             .HasColumnName("payload").HasColumnType("text");
+        builder.Property(webhookEvent => webhookEvent.SourceTraceParent)
+            .HasColumnName("source_trace_parent").HasColumnType("text");
         builder.Property(webhookEvent => webhookEvent.Status)
             .HasColumnName("status").HasColumnType("text");
         builder.Property(webhookEvent => webhookEvent.AttemptCount).HasColumnName("attempt_count");

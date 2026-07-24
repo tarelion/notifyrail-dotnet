@@ -14,10 +14,14 @@ public sealed class MessageIntake
         "messages_api_client_id_idempotency_key_key";
 
     private readonly NotifyRailDbContext _dbContext;
+    private readonly ILogger<MessageIntake> _logger;
 
-    public MessageIntake(NotifyRailDbContext dbContext)
+    public MessageIntake(
+        NotifyRailDbContext dbContext,
+        ILogger<MessageIntake> logger)
     {
         _dbContext = dbContext;
+        _logger = logger;
     }
 
     public async Task<CreateMessageOutcome> CreateAsync(
@@ -34,6 +38,7 @@ public sealed class MessageIntake
             string.Join(
                 ',',
                 command.Recipients.Select(NotifyRailTelemetry.MaskRecipient)));
+        var sourceTraceParent = NotifyRailTelemetry.CaptureCurrentTraceParent();
 
         var createdAt = PostgresTimestamp.Normalize(DateTimeOffset.UtcNow);
         var scheduledAt = command.ScheduledAt is null
@@ -53,7 +58,11 @@ public sealed class MessageIntake
             command.Encoding);
 
         var deliveries = command.Recipients
-            .Select(recipient => Delivery.Create(message.Id, recipient, createdAt))
+            .Select(recipient => Delivery.Create(
+                message.Id,
+                recipient,
+                createdAt,
+                sourceTraceParent: sourceTraceParent))
             .ToArray();
         activity?.SetTag(NotifyRailTelemetry.MessageIdTag, message.Id.ToString());
         activity?.SetTag(NotifyRailTelemetry.DeliveryCountTag, deliveries.Length);
@@ -82,6 +91,16 @@ public sealed class MessageIntake
             return await ReplayExistingMessageAsync(apiClientId, command, cancellationToken);
         }
 
+        _logger.LogInformation(
+            "Accepted Message {notifyrail.message.id} for API Client " +
+            "{notifyrail.api_client.id} with {notifyrail.delivery.count} Deliveries " +
+            "for {notifyrail.recipient.masked}",
+            message.Id,
+            apiClientId,
+            deliveries.Length,
+            string.Join(
+                ',',
+                command.Recipients.Select(NotifyRailTelemetry.MaskRecipient)));
         return CreateMessageOutcome.Accepted(new CreateMessageResponse(
             message.Id,
             deliveries.Length,
