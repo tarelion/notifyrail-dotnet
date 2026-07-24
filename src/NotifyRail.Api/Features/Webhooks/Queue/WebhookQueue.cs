@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Infrastructure.Persistence;
+using NotifyRail.Api.Telemetry;
 
 namespace NotifyRail.Api.Features.Webhooks.Queue;
 
@@ -16,11 +17,13 @@ public sealed class WebhookQueue
     private readonly double _jitterRatio;
     private readonly TimeSpan _automaticRetryWindow;
     private readonly TimeSpan _claimTimeout;
+    private readonly ILogger<WebhookQueue> _logger;
 
     public WebhookQueue(
         NotifyRailDbContext dbContext,
         IOptions<WebhookWorkerOptions> options,
-        IWebhookRetryJitter jitter)
+        IWebhookRetryJitter jitter,
+        ILogger<WebhookQueue>? logger = null)
     {
         var value = options.Value;
         if (value.MinimumRetryDelay <= TimeSpan.Zero)
@@ -67,6 +70,8 @@ public sealed class WebhookQueue
         _jitterRatio = value.JitterRatio;
         _automaticRetryWindow = value.AutomaticRetryWindow;
         _claimTimeout = value.ClaimTimeout;
+        _logger = logger
+            ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<WebhookQueue>.Instance;
     }
 
     public async Task<IReadOnlyList<WebhookJob>> ClaimDueAsync(
@@ -87,7 +92,7 @@ public sealed class WebhookQueue
         workerId = workerId.Trim();
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         var staleBefore = claimTime.Subtract(_claimTimeout);
-        await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+        var deadEvents = await _dbContext.Database.SqlQuery<DeadlineDeadWebhookRow>(
             $"""
             UPDATE webhook_events
             SET
@@ -105,8 +110,14 @@ public sealed class WebhookQueue
                         AND claimed_at <= {staleBefore}
                     )
                 )
-            """,
-            cancellationToken);
+            RETURNING
+                id AS "EventId",
+                api_client_id AS "ApiClientId",
+                message_id AS "MessageId",
+                delivery_id AS "DeliveryId",
+                source_trace_parent AS "SourceTraceParent"
+            """)
+            .ToListAsync(cancellationToken);
         var rows = await _dbContext.Database.SqlQuery<ClaimedWebhookRow>(
             $"""
             WITH due AS (
@@ -204,18 +215,54 @@ public sealed class WebhookQueue
         }
 
         await transaction.CommitAsync(cancellationToken);
+        RecordDeadlineDeaths(deadEvents);
         return rows.Select(row => new WebhookJob(
             new WebhookClaim(row.EventId, workerId, row.AttemptCount + 1),
             new WebhookRequest(
                 row.EventId,
-                row.ApiClientId,
-                row.MessageId,
-                row.DeliveryId,
+                new TelemetryCorrelation(
+                    row.ApiClientId,
+                    row.MessageId,
+                    row.DeliveryId,
+                    row.SourceTraceParent),
                 row.EndpointUrl,
                 row.Body,
-                protectedSecrets[row.ApiClientId],
-                row.SourceTraceParent)))
+                protectedSecrets[row.ApiClientId])))
             .ToArray();
+    }
+
+    private void RecordDeadlineDeaths(
+        IReadOnlyCollection<DeadlineDeadWebhookRow> deadEvents)
+    {
+        foreach (var deadEvent in deadEvents)
+        {
+            var correlation = new TelemetryCorrelation(
+                deadEvent.ApiClientId,
+                deadEvent.MessageId,
+                deadEvent.DeliveryId,
+                deadEvent.SourceTraceParent);
+            using var activity = NotifyRailTelemetry.StartLinkedActivity(
+                NotifyRailTelemetry.WebhookDeathActivity,
+                System.Diagnostics.ActivityKind.Consumer,
+                correlation);
+            activity?.SetTag(
+                NotifyRailTelemetry.WebhookEventIdTag,
+                deadEvent.EventId.ToString());
+            activity?.SetTag(
+                NotifyRailTelemetry.WebhookDispatchStatusTag,
+                "dead");
+            activity?.SetTag(
+                NotifyRailTelemetry.OutcomeTag,
+                "automatic_deadline_exceeded");
+            _logger.LogInformation(
+                "Marked Webhook Event {notifyrail.webhook_event.id} dead for Delivery " +
+                "{notifyrail.delivery.id}, Message {notifyrail.message.id}, and API Client " +
+                "{notifyrail.api_client.id} after its automatic attempt deadline",
+                deadEvent.EventId,
+                deadEvent.DeliveryId,
+                deadEvent.MessageId,
+                deadEvent.ApiClientId);
+        }
     }
 
     public async Task<WebhookSigningLease> AcquireSigningLeaseAsync(
@@ -433,5 +480,14 @@ public sealed class WebhookQueue
         public string EndpointUrl { get; init; } = null!;
         public string Body { get; init; } = null!;
         public int AttemptCount { get; init; }
+    }
+
+    private sealed class DeadlineDeadWebhookRow
+    {
+        public Guid EventId { get; init; }
+        public Guid ApiClientId { get; init; }
+        public Guid MessageId { get; init; }
+        public Guid DeliveryId { get; init; }
+        public string? SourceTraceParent { get; init; }
     }
 }

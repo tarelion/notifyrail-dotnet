@@ -79,7 +79,11 @@ public sealed class WebhookEventConfiguration : IEntityTypeConfiguration<Webhook
             .IsUnique()
             .HasDatabaseName("webhook_events_delivery_id_sequence_key");
         builder.HasIndex(webhookEvent => new
-            { webhookEvent.Status, webhookEvent.NextAttemptAt, webhookEvent.CreatedAt })
+        {
+            webhookEvent.Status,
+            webhookEvent.NextAttemptAt,
+            webhookEvent.CreatedAt,
+        })
             .HasDatabaseName("webhook_events_due_idx");
 
         builder.HasOne<ApiClient>().WithMany().HasForeignKey(webhookEvent => webhookEvent.ApiClientId)

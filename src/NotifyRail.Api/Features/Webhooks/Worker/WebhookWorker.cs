@@ -67,16 +67,7 @@ public sealed class WebhookWorker
             using var activity = NotifyRailTelemetry.StartLinkedActivity(
                 NotifyRailTelemetry.WebhookDispatchActivity,
                 ActivityKind.Consumer,
-                job.Request.SourceTraceParent);
-            activity?.SetTag(
-                NotifyRailTelemetry.ApiClientIdTag,
-                job.Request.ApiClientId.ToString());
-            activity?.SetTag(
-                NotifyRailTelemetry.MessageIdTag,
-                job.Request.MessageId.ToString());
-            activity?.SetTag(
-                NotifyRailTelemetry.DeliveryIdTag,
-                job.Request.DeliveryId.ToString());
+                job.Request.Correlation);
             activity?.SetTag(
                 NotifyRailTelemetry.WebhookEventIdTag,
                 job.Request.EventId.ToString());
@@ -84,7 +75,7 @@ public sealed class WebhookWorker
                 NotifyRailTelemetry.WebhookAttemptNumberTag,
                 job.Claim.AttemptNumber);
             await using var signingLease = await _queue.AcquireSigningLeaseAsync(
-                job.Request.ApiClientId,
+                job.Request.Correlation.ApiClientId,
                 cancellationToken);
             var attemptedAt = PostgresTimestamp.Normalize(_timeProvider.GetUtcNow());
             var request = job.Request with
@@ -114,9 +105,9 @@ public sealed class WebhookWorker
                 "{notifyrail.webhook_event.dispatch_status}",
                 recorded.WebhookAttemptId,
                 job.Request.EventId,
-                job.Request.DeliveryId,
-                job.Request.MessageId,
-                job.Request.ApiClientId,
+                job.Request.Correlation.DeliveryId,
+                job.Request.Correlation.MessageId,
+                job.Request.Correlation.ApiClientId,
                 result.Outcome,
                 recorded.EventStatus);
             processed++;

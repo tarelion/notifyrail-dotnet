@@ -88,9 +88,20 @@ public sealed class MessageIntake
             // committed winner through this DbContext.
             _dbContext.ChangeTracker.Clear();
 
-            return await ReplayExistingMessageAsync(apiClientId, command, cancellationToken);
+            var replay = await ReplayExistingMessageAsync(
+                apiClientId,
+                command,
+                cancellationToken);
+            activity?.SetTag(
+                NotifyRailTelemetry.MessageIdTag,
+                replay.Response?.MessageId.ToString());
+            activity?.SetTag(
+                NotifyRailTelemetry.OutcomeTag,
+                replay.Kind.ToString());
+            return replay;
         }
 
+        activity?.SetTag(NotifyRailTelemetry.OutcomeTag, "Accepted");
         _logger.LogInformation(
             "Accepted Message {notifyrail.message.id} for API Client " +
             "{notifyrail.api_client.id} with {notifyrail.delivery.count} Deliveries " +

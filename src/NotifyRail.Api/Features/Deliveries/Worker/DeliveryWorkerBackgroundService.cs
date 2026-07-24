@@ -51,8 +51,8 @@ public sealed class DeliveryWorkerBackgroundService : BackgroundService
             catch (Exception exception)
             {
                 _logger.LogError(
-                    exception,
-                    "Delivery batch failed; polling will continue");
+                    "Delivery batch failed with {ExceptionType}; polling will continue",
+                    exception.GetType().Name);
             }
 
             await Task.Delay(_pollInterval, _timeProvider, stoppingToken);

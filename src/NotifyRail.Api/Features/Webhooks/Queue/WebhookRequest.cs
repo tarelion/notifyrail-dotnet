@@ -1,11 +1,10 @@
+using NotifyRail.Api.Telemetry;
+
 namespace NotifyRail.Api.Features.Webhooks.Queue;
 
 public sealed record WebhookRequest(
     Guid EventId,
-    Guid ApiClientId,
-    Guid MessageId,
-    Guid DeliveryId,
+    TelemetryCorrelation Correlation,
     string EndpointUrl,
     string Body,
-    byte[] ProtectedSecret,
-    string? SourceTraceParent);
+    byte[] ProtectedSecret);

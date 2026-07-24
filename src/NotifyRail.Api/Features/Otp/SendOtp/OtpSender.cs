@@ -84,13 +84,21 @@ public sealed class OtpSender(
             await transaction.RollbackAsync(cancellationToken);
             dbContext.ChangeTracker.Clear();
 
-            return await ReplayExistingAsync(
+            var replay = await ReplayExistingAsync(
                 apiClientId,
                 recipient,
                 idempotencyKey,
                 cancellationToken);
+            activity?.SetTag(
+                NotifyRailTelemetry.MessageIdTag,
+                replay.Response?.MessageId.ToString());
+            activity?.SetTag(
+                NotifyRailTelemetry.OutcomeTag,
+                replay.Response is null ? "IdempotencyConflict" : "Accepted");
+            return replay;
         }
 
+        activity?.SetTag(NotifyRailTelemetry.OutcomeTag, "Accepted");
         logger.LogInformation(
             "Accepted OTP Message {notifyrail.message.id} for API Client " +
             "{notifyrail.api_client.id} with {notifyrail.delivery.count} Delivery " +

@@ -13,6 +13,7 @@ using NotifyRail.Api.Features.Webhooks;
 using NotifyRail.Api.Features.Webhooks.Dispatch;
 using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Infrastructure.Persistence;
+using NotifyRail.Api.Telemetry;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Features.Webhooks.Persistence;
 using Npgsql;
@@ -594,13 +595,14 @@ public sealed class WebhookEndpointManagementIntegrationTests : IDisposable
         var result = await dispatcher.SendAsync(
             new WebhookRequest(
                 Guid.NewGuid(),
-                apiClient.ApiClientId,
-                Guid.NewGuid(),
-                Guid.NewGuid(),
+                new TelemetryCorrelation(
+                    apiClient.ApiClientId,
+                    Guid.NewGuid(),
+                    Guid.NewGuid(),
+                    SourceTraceParent: null),
                 url,
                 "{}",
-                protector.Protect("nrs_test-secret"),
-                SourceTraceParent: null),
+                protector.Protect("nrs_test-secret")),
             DateTimeOffset.UtcNow,
             CancellationToken.None);
 

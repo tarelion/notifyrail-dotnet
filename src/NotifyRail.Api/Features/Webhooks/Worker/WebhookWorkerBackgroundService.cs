@@ -45,7 +45,9 @@ public sealed class WebhookWorkerBackgroundService
             }
             catch (Exception exception)
             {
-                _logger.LogError(exception, "Webhook batch failed; polling will continue");
+                _logger.LogError(
+                    "Webhook batch failed with {ExceptionType}; polling will continue",
+                    exception.GetType().Name);
             }
 
             await Task.Delay(_pollInterval, _timeProvider, stoppingToken);

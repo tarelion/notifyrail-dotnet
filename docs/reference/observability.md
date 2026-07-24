@@ -41,10 +41,11 @@ an absolute URI prevents startup with
 | --- | --- | --- |
 | `notifyrail.message.intake` | `Producer` | Child of the current HTTP request when present. Its W3C trace parent is persisted on each created Delivery. OTP send uses the same activity name. |
 | `notifyrail.delivery.process` | `Consumer` | Starts a new trace and links to `deliveries.source_trace_parent` when valid. |
-| `notifyrail.provider_callback.handle` | `Consumer` | Starts a new trace and links to the matched Delivery's persisted source context. |
+| `notifyrail.provider_callback.handle` | `Consumer` | Keeps the live HTTP request as parent and also links to the matched Delivery's persisted source context. |
 | `notifyrail.webhook_event.create` | `Producer` | Child of the live Delivery-processing or Provider Callback activity. Its W3C context is persisted on the Webhook Event. |
 | `notifyrail.webhook.dispatch` | `Consumer` | Starts a new trace and links to `webhook_events.source_trace_parent`. Every retry repeats this link and receives its own span. |
-| `notifyrail.webhook.replay` | `Producer` | Starts a new trace linked to the Webhook Event's current source context. A successful replay replaces that context so the next dispatch links to the replay. |
+| `notifyrail.webhook.death` | `Consumer` | Starts a new trace linked to the Webhook Event source when the deadline scan marks an event dead without another dispatch. |
+| `notifyrail.webhook.replay` | `Producer` | Keeps the live Management HTTP request as parent and links to the Webhook Event's current source context. A successful replay replaces that context so the next dispatch links to the replay. |
 
 Rows created before the correlation migrations can have a null source trace
 parent. Their worker activities still carry stable identifiers but contain no
@@ -80,6 +81,7 @@ boundaries:
 - Provider Callback application
 - Webhook Event creation
 - Webhook Attempt result recording
+- deadline-based Webhook Event death
 - Dead Webhook Event replay
 
 Each record includes the identifiers relevant at that boundary. Webhook

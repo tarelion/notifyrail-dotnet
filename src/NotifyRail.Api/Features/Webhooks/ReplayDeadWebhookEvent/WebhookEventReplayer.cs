@@ -34,19 +34,16 @@ public sealed class WebhookEventReplayer(
         {
             return null;
         }
+        var correlation = new TelemetryCorrelation(
+            webhookEvent.ApiClientId,
+            webhookEvent.MessageId,
+            webhookEvent.DeliveryId,
+            webhookEvent.SourceTraceParent);
         using var activity = NotifyRailTelemetry.StartLinkedActivity(
             NotifyRailTelemetry.WebhookReplayActivity,
             ActivityKind.Producer,
-            webhookEvent.SourceTraceParent);
-        activity?.SetTag(
-            NotifyRailTelemetry.ApiClientIdTag,
-            webhookEvent.ApiClientId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.MessageIdTag,
-            webhookEvent.MessageId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.DeliveryIdTag,
-            webhookEvent.DeliveryId.ToString());
+            correlation,
+            preserveCurrentParent: true);
         activity?.SetTag(
             NotifyRailTelemetry.WebhookEventIdTag,
             webhookEvent.WebhookEventId.ToString());

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -13,13 +14,15 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using NotifyRail.Api.Features.Deliveries.Worker;
+using NotifyRail.Api.Features.Deliveries.Providers;
+using NotifyRail.Api.Features.Deliveries.Queue;
 using NotifyRail.Api.Features.ApiClients.GetCurrentApiClient;
 using NotifyRail.Api.Features.Messages.GetMessageDeliveries;
 using NotifyRail.Api.Features.Messages.CreateMessage;
 using NotifyRail.Api.Features.Otp.SendOtp;
 using NotifyRail.Api.Features.Webhooks.Dispatch;
+using NotifyRail.Api.Features.Webhooks.Queue;
 using NotifyRail.Api.Features.Webhooks.RegisterWebhookEndpoint;
-using NotifyRail.Api.Features.Webhooks.ReplayDeadWebhookEvent;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Telemetry;
@@ -36,7 +39,11 @@ public sealed class TelemetryIntegrationTests
     private const string MessageBody = "sensitive message body";
     private const string Recipient = "+905551234567";
     private const string CallbackSecret = "telemetry-callback-secret";
+    private const string OperatorCredential =
+        "message-api-test-operator-credential";
     private const string RemoteResponseBody = "sensitive remote response body";
+    private const string SensitiveProviderError =
+        "+905551234567 sensitive message body credential-like-value";
 
     private readonly List<Activity> _activities = [];
     private readonly List<LogRecord> _logs = [];
@@ -48,6 +55,8 @@ public sealed class TelemetryIntegrationTests
     {
         _tracerProvider = Sdk.CreateTracerProviderBuilder()
             .AddSource(NotifyRailTelemetry.ActivitySourceName)
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
             .SetSampler(new AlwaysOnSampler())
             .AddInMemoryExporter(_activities)
             .Build();
@@ -133,16 +142,47 @@ public sealed class TelemetryIntegrationTests
         Assert.Equal(1, activity.GetTagItem(NotifyRailTelemetry.DeliveryCountTag));
         Assert.Equal("+9*********67", activity.GetTagItem(NotifyRailTelemetry.RecipientTag));
 
-        var exported = string.Join(
-            '\n',
-            activity.TagObjects.Select(tag => $"{tag.Key}={tag.Value}"))
-            + string.Join(
-                '\n',
-                _logs.SelectMany(log => log.Attributes ?? [])
-                    .Select(attribute => $"{attribute.Key}={attribute.Value}"));
+        var exported = RenderTelemetry();
         Assert.DoesNotContain(Recipient, exported, StringComparison.Ordinal);
         Assert.DoesNotContain(MessageBody, exported, StringComparison.Ordinal);
         Assert.DoesNotContain(apiKey, exported, StringComparison.Ordinal);
+        Assert.DoesNotContain(OperatorCredential, exported, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IdempotentMessageReplay_UsesPersistedMessageIdInTelemetry()
+    {
+        await ResetDatabaseAsync();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync(
+            "Replay telemetry client");
+        var request = new
+        {
+            type = "transactional",
+            channel = "sms",
+            sender_title = "NotifyRail",
+            body = MessageBody,
+            recipients = new[] { Recipient },
+            idempotency_key = $"replay-telemetry-{Guid.NewGuid()}",
+        };
+
+        using var firstResponse = await client.PostAsJsonAsync("/messages", request);
+        using var replayResponse = await client.PostAsJsonAsync("/messages", request);
+        var first = await firstResponse.Content.ReadFromJsonAsync<CreateMessageResponse>();
+        var replay = await replayResponse.Content.ReadFromJsonAsync<CreateMessageResponse>();
+        Assert.NotNull(first);
+        Assert.NotNull(replay);
+        Assert.Equal(first.MessageId, replay.MessageId);
+
+        var intakeSpans = _activities
+            .Where(activity => activity.OperationName
+                == NotifyRailTelemetry.MessageIntakeActivity)
+            .ToArray();
+        Assert.Equal(2, intakeSpans.Length);
+        Assert.All(
+            intakeSpans,
+            activity => Assert.Equal(
+                first.MessageId.ToString(),
+                activity.GetTagItem(NotifyRailTelemetry.MessageIdTag)));
     }
 
     [Fact]
@@ -273,6 +313,9 @@ public sealed class TelemetryIntegrationTests
         Assert.Contains(
             callback.Links,
             link => link.Context.TraceId == intake.TraceId);
+        Assert.Contains(
+            _activities,
+            activity => activity.SpanId == callback.ParentSpanId);
         Assert.Equal(
             delivery.DeliveryId.ToString(),
             callback.GetTagItem(NotifyRailTelemetry.DeliveryIdTag));
@@ -320,22 +363,18 @@ public sealed class TelemetryIntegrationTests
         Assert.Contains(
             logAttributes,
             attribute => attribute.Key == NotifyRailTelemetry.WebhookAttemptIdTag);
-        var exportedLogs = string.Join(
-            '\n',
-            _logs.Select(log => string.Join(
-                ' ',
-                (log.Attributes ?? [])
-                    .Select(attribute => $"{attribute.Key}={attribute.Value}"))));
-        Assert.DoesNotContain(Recipient, exportedLogs, StringComparison.Ordinal);
-        Assert.DoesNotContain(MessageBody, exportedLogs, StringComparison.Ordinal);
-        Assert.DoesNotContain(CallbackSecret, exportedLogs, StringComparison.Ordinal);
-        Assert.DoesNotContain(webhookSecret, exportedLogs, StringComparison.Ordinal);
-        Assert.DoesNotContain(RemoteResponseBody, exportedLogs, StringComparison.Ordinal);
+        var exportedTelemetry = RenderTelemetry();
+        Assert.DoesNotContain(Recipient, exportedTelemetry, StringComparison.Ordinal);
+        Assert.DoesNotContain(MessageBody, exportedTelemetry, StringComparison.Ordinal);
+        Assert.DoesNotContain(CallbackSecret, exportedTelemetry, StringComparison.Ordinal);
+        Assert.DoesNotContain(OperatorCredential, exportedTelemetry, StringComparison.Ordinal);
+        Assert.DoesNotContain(webhookSecret, exportedTelemetry, StringComparison.Ordinal);
+        Assert.DoesNotContain(RemoteResponseBody, exportedTelemetry, StringComparison.Ordinal);
         Assert.All(
             _webhookHandler.Signatures,
             signature => Assert.DoesNotContain(
                 signature,
-                exportedLogs,
+                exportedTelemetry,
                 StringComparison.Ordinal));
     }
 
@@ -428,15 +467,13 @@ public sealed class TelemetryIntegrationTests
             eventId.ToString(),
             death.GetTagItem(NotifyRailTelemetry.WebhookEventIdTag));
 
-        await using (var replayScope = _factory.Services.CreateAsyncScope())
-        {
-            var replayer = replayScope.ServiceProvider
-                .GetRequiredService<WebhookEventReplayer>();
-            Assert.NotNull(await replayer.ReplayAsync(
-                eventId,
-                firstAttemptAt.AddMinutes(2),
-                CancellationToken.None));
-        }
+        using var operatorClient = _factory.CreateClient();
+        operatorClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Operator", OperatorCredential);
+        using var replayResponse = await operatorClient.PostAsync(
+            $"/management/webhook-events/{eventId}/replay",
+            content: null);
+        replayResponse.EnsureSuccessStatusCode();
         var replay = Assert.Single(
             _activities,
             candidate => candidate.OperationName
@@ -444,6 +481,9 @@ public sealed class TelemetryIntegrationTests
         Assert.Contains(
             replay.Links,
             link => link.Context.TraceId == eventCreation.TraceId);
+        Assert.Contains(
+            _activities,
+            activity => activity.SpanId == replay.ParentSpanId);
 
         await using (var replayAttemptScope = _factory.Services.CreateAsyncScope())
         {
@@ -465,6 +505,81 @@ public sealed class TelemetryIntegrationTests
             succeededReplay.Links,
             link => link.Context.TraceId == replay.TraceId);
         Assert.NotEqual(retry.SpanId, death.SpanId);
+    }
+
+    [Fact]
+    public async Task WebhookDeadlineDeath_ExportsLinkedDeathActivity()
+    {
+        await ResetDatabaseAsync();
+        _webhookHandler.RespondWith(HttpStatusCode.InternalServerError);
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync(
+            "Webhook deadline telemetry client");
+        var currentClient = await client.GetFromJsonAsync<GetCurrentApiClientResponse>(
+            "/api-client");
+        Assert.NotNull(currentClient);
+        await using (var registrationScope = _factory.Services.CreateAsyncScope())
+        {
+            var registrar = registrationScope.ServiceProvider
+                .GetRequiredService<WebhookEndpointRegistrar>();
+            Assert.NotNull(await registrar.RegisterAsync(
+                currentClient.ApiClientId,
+                "https://hooks.example.com/notifyrail",
+                CancellationToken.None));
+        }
+        using var createResponse = await client.PostAsJsonAsync(
+            "/messages",
+            new
+            {
+                type = "transactional",
+                channel = "sms",
+                sender_title = "NotifyRail",
+                body = MessageBody,
+                recipients = new[] { Recipient },
+                idempotency_key = $"webhook-deadline-{Guid.NewGuid()}",
+            });
+        createResponse.EnsureSuccessStatusCode();
+        await using (var deliveryScope = _factory.Services.CreateAsyncScope())
+        {
+            var worker = deliveryScope.ServiceProvider
+                .GetRequiredService<DeliveryWorker>();
+            Assert.Equal(1, await worker.ProcessBatchAsync(
+                DateTimeOffset.UtcNow,
+                CancellationToken.None));
+        }
+        var eventCreation = Assert.Single(
+            _activities,
+            activity => activity.OperationName
+                == NotifyRailTelemetry.WebhookEventCreateActivity);
+        var firstAttemptAt = DateTimeOffset.UtcNow;
+        await using (var attemptScope = _factory.Services.CreateAsyncScope())
+        {
+            var worker = attemptScope.ServiceProvider.GetRequiredService<WebhookWorker>();
+            Assert.Equal(1, await worker.ProcessBatchAsync(
+                firstAttemptAt,
+                CancellationToken.None));
+        }
+        await using (var deadlineScope = _factory.Services.CreateAsyncScope())
+        {
+            var queue = deadlineScope.ServiceProvider.GetRequiredService<WebhookQueue>();
+            Assert.Empty(await queue.ClaimDueAsync(
+                "deadline-scan",
+                limit: 1,
+                firstAttemptAt.AddMinutes(3),
+                CancellationToken.None));
+        }
+
+        var death = Assert.Single(
+            _activities,
+            activity => activity.OperationName
+                == NotifyRailTelemetry.WebhookDeathActivity);
+        Assert.Contains(
+            death.Links,
+            link => link.Context.TraceId == eventCreation.TraceId);
+        Assert.NotNull(
+            death.GetTagItem(NotifyRailTelemetry.WebhookEventIdTag));
+        Assert.Equal(
+            "dead",
+            death.GetTagItem(NotifyRailTelemetry.WebhookDispatchStatusTag));
     }
 
     [Fact]
@@ -496,16 +611,78 @@ public sealed class TelemetryIntegrationTests
             "+9*********67",
             intake.GetTagItem(NotifyRailTelemetry.RecipientTag));
 
-        var exported = string.Join(
-            '\n',
-            _activities.SelectMany(activity => activity.TagObjects)
-                .Select(tag => $"{tag.Key}={tag.Value}"))
-            + string.Join(
-                '\n',
-                _logs.SelectMany(log => log.Attributes ?? [])
-                    .Select(attribute => $"{attribute.Key}={attribute.Value}"));
+        var exported = RenderTelemetry();
         Assert.DoesNotContain(result.DebugCode, exported, StringComparison.Ordinal);
         Assert.DoesNotContain(Recipient, exported, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IdempotentOtpReplay_UsesPersistedMessageIdInTelemetry()
+    {
+        await ResetDatabaseAsync();
+        using var client = await _factory.CreateAuthenticatedMessageClientAsync(
+            "OTP replay telemetry client");
+        var request = new
+        {
+            recipient = Recipient,
+            idempotency_key = $"otp-replay-telemetry-{Guid.NewGuid()}",
+        };
+        using var firstResponse = await client.PostAsJsonAsync("/otp/send", request);
+        using var replayResponse = await client.PostAsJsonAsync("/otp/send", request);
+        var first = await firstResponse.Content.ReadFromJsonAsync<SendOtpResponse>();
+        var replay = await replayResponse.Content.ReadFromJsonAsync<SendOtpResponse>();
+        Assert.NotNull(first);
+        Assert.NotNull(replay);
+        Assert.Equal(first.MessageId, replay.MessageId);
+
+        var intakeSpans = _activities
+            .Where(activity => activity.OperationName
+                == NotifyRailTelemetry.MessageIntakeActivity)
+            .ToArray();
+        Assert.Equal(2, intakeSpans.Length);
+        Assert.All(
+            intakeSpans,
+            activity => Assert.Equal(
+                first.MessageId.ToString(),
+                activity.GetTagItem(NotifyRailTelemetry.MessageIdTag)));
+        Assert.DoesNotContain(first.DebugCode, RenderTelemetry(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeliveryWorker_DoesNotExportProviderExceptionContent()
+    {
+        await ResetDatabaseAsync();
+        using var factory = _factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IProviderSender>();
+                services.AddSingleton<IProviderSender, SensitiveFailingProvider>();
+            }));
+        using var client = await factory.CreateAuthenticatedMessageClientAsync(
+            "Provider exception telemetry client");
+        using var response = await client.PostAsJsonAsync(
+            "/messages",
+            new
+            {
+                type = "transactional",
+                channel = "sms",
+                sender_title = "NotifyRail",
+                body = MessageBody,
+                recipients = new[] { Recipient },
+                idempotency_key = $"provider-exception-{Guid.NewGuid()}",
+            });
+        response.EnsureSuccessStatusCode();
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var worker = scope.ServiceProvider.GetRequiredService<DeliveryWorker>();
+        Assert.Equal(1, await worker.ProcessBatchAsync(
+            DateTimeOffset.UtcNow,
+            CancellationToken.None));
+
+        var exported = string.Join('\n', _logs.Select(RenderLog));
+        Assert.DoesNotContain(SensitiveProviderError, exported, StringComparison.Ordinal);
+        Assert.DoesNotContain(Recipient, exported, StringComparison.Ordinal);
+        Assert.DoesNotContain(MessageBody, exported, StringComparison.Ordinal);
     }
 
     private async Task ResetDatabaseAsync()
@@ -553,6 +730,32 @@ public sealed class TelemetryIntegrationTests
         return request;
     }
 
+    private static string RenderLog(LogRecord log)
+    {
+        return string.Join(
+            ' ',
+            (log.Attributes ?? [])
+                .Select(attribute => $"{attribute.Key}={attribute.Value}"))
+            + $" {log.Body} {log.FormattedMessage} {log.Exception}";
+    }
+
+    private string RenderTelemetry()
+    {
+        var activities = string.Join(
+            '\n',
+            _activities.Select(activity => string.Join(
+                ' ',
+                new[]
+                {
+                    activity.DisplayName,
+                    activity.StatusDescription,
+                }
+                .Concat(activity.TagObjects.Select(tag => $"{tag.Key}={tag.Value}"))
+                .Concat(activity.Events.SelectMany(activityEvent =>
+                    activityEvent.Tags.Select(tag => $"{tag.Key}={tag.Value}"))))));
+        return activities + '\n' + string.Join('\n', _logs.Select(RenderLog));
+    }
+
     private sealed class SuccessfulWebhookHandler : HttpMessageHandler
     {
         private readonly Queue<HttpStatusCode> _responses = [];
@@ -594,6 +797,18 @@ public sealed class TelemetryIntegrationTests
             {
                 Content = new StringContent(RemoteResponseBody),
             });
+        }
+    }
+
+    private sealed class SensitiveFailingProvider : IProviderSender
+    {
+        public string Name => "sensitive-failing-provider";
+
+        public Task<ProviderResult> SendAsync(
+            ProviderRequest request,
+            CancellationToken cancellationToken)
+        {
+            throw new HttpRequestException(SensitiveProviderError);
         }
     }
 }

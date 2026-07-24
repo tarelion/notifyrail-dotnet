@@ -70,22 +70,11 @@ public sealed class DeliveryWorker
             using var activity = NotifyRailTelemetry.StartLinkedActivity(
                 NotifyRailTelemetry.DeliveryProcessActivity,
                 ActivityKind.Consumer,
-                job.SourceTraceParent);
-            activity?.SetTag(
-                NotifyRailTelemetry.ApiClientIdTag,
-                job.ApiClientId.ToString());
-            activity?.SetTag(
-                NotifyRailTelemetry.MessageIdTag,
-                job.MessageId.ToString());
-            activity?.SetTag(
-                NotifyRailTelemetry.DeliveryIdTag,
-                job.Claim.DeliveryId.ToString());
+                job.Correlation,
+                job.Request.Recipient);
             activity?.SetTag(
                 NotifyRailTelemetry.DeliveryAttemptNumberTag,
                 job.Claim.AttemptNumber);
-            activity?.SetTag(
-                NotifyRailTelemetry.RecipientTag,
-                NotifyRailTelemetry.MaskRecipient(job.Request.Recipient));
 
             var result = await SendAsync(job, cancellationToken);
             activity?.SetTag(NotifyRailTelemetry.OutcomeTag, result.Outcome.ToString());
@@ -101,8 +90,8 @@ public sealed class DeliveryWorker
                 "attempt {notifyrail.delivery_attempt.number} as {notifyrail.outcome} " +
                 "for {notifyrail.recipient.masked}",
                 job.Claim.DeliveryId,
-                job.MessageId,
-                job.ApiClientId,
+                job.Correlation.MessageId,
+                job.Correlation.ApiClientId,
                 job.Claim.AttemptNumber,
                 result.Outcome,
                 NotifyRailTelemetry.MaskRecipient(job.Request.Recipient));
@@ -124,10 +113,11 @@ public sealed class DeliveryWorker
             exception is HttpRequestException or TimeoutException)
         {
             _logger.LogWarning(
-                exception,
-                "Provider {Provider} failed delivery {DeliveryId}; scheduling a retry",
+                "Provider {Provider} failed Delivery {notifyrail.delivery.id} " +
+                "with {ExceptionType}; scheduling a retry",
                 _sender.Name,
-                job.Claim.DeliveryId);
+                job.Claim.DeliveryId,
+                exception.GetType().Name);
             return new ProviderResult(
                 ProviderOutcome.RetryableFailure,
                 _sender.Name,

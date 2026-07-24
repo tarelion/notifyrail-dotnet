@@ -87,18 +87,14 @@ public sealed class DeliveryWebhookOutbox(
             activity?.SetTag(NotifyRailTelemetry.OutcomeTag, "no_active_endpoint");
             return;
         }
-        activity?.SetTag(
-            NotifyRailTelemetry.ApiClientIdTag,
-            source.ApiClientId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.MessageIdTag,
-            source.MessageId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.DeliveryIdTag,
-            source.DeliveryId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.RecipientTag,
-            NotifyRailTelemetry.MaskRecipient(source.Recipient));
+        NotifyRailTelemetry.SetCorrelation(
+            activity,
+            new TelemetryCorrelation(
+                source.ApiClientId,
+                source.MessageId,
+                source.DeliveryId,
+                SourceTraceParent: null),
+            source.Recipient);
 
         var lastSequence = await dbContext.WebhookEvents
             .Where(webhookEvent => webhookEvent.DeliveryId == deliveryId)

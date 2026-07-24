@@ -11,6 +11,7 @@ public static class NotifyRailTelemetry
     public const string ProviderCallbackActivity = "notifyrail.provider_callback.handle";
     public const string WebhookEventCreateActivity = "notifyrail.webhook_event.create";
     public const string WebhookDispatchActivity = "notifyrail.webhook.dispatch";
+    public const string WebhookDeathActivity = "notifyrail.webhook.death";
     public const string WebhookReplayActivity = "notifyrail.webhook.replay";
 
     public const string ApiClientIdTag = "notifyrail.api_client.id";
@@ -38,22 +39,47 @@ public static class NotifyRailTelemetry
     internal static Activity? StartLinkedActivity(
         string name,
         ActivityKind kind,
-        string? traceParent)
+        TelemetryCorrelation? correlation,
+        string? recipient = null,
+        bool preserveCurrentParent = false)
     {
         var links = ActivityContext.TryParse(
-            traceParent,
+            correlation?.SourceTraceParent,
             traceState: null,
             isRemote: false,
             out var context)
             ? new[] { new ActivityLink(context) }
             : [];
 
-        return ActivitySource.StartActivity(
+        var activity = ActivitySource.StartActivity(
             name,
             kind,
-            parentContext: default,
+            parentContext: preserveCurrentParent
+                ? Activity.Current?.Context ?? default
+                : default,
             tags: null,
             links);
+        SetCorrelation(activity, correlation, recipient);
+        return activity;
+    }
+
+    internal static void SetCorrelation(
+        Activity? activity,
+        TelemetryCorrelation? correlation,
+        string? recipient = null)
+    {
+        if (activity is null || correlation is null)
+        {
+            return;
+        }
+
+        activity.SetTag(ApiClientIdTag, correlation.ApiClientId.ToString());
+        activity.SetTag(MessageIdTag, correlation.MessageId.ToString());
+        activity.SetTag(DeliveryIdTag, correlation.DeliveryId.ToString());
+        if (recipient is not null)
+        {
+            activity.SetTag(RecipientTag, MaskRecipient(recipient));
+        }
     }
 
     internal static string MaskRecipient(string recipient)

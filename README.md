@@ -219,7 +219,7 @@ remains available for development.
 Current validation:
 
 ```text
-Passed: 209
+Passed: 218
 Failed: 0
 Skipped: 0
 ```
@@ -229,7 +229,8 @@ priority ordering, retry/backoff, stale claim recovery, provider callbacks,
 signed real-HTTP webhook dispatch, Webhook Secret rotation overlap, delivery
 reporting, Dead Webhook Event expiry, inspection and replay, OTP TTL, OTP
 one-time verification, Webhook Endpoint address policy, DNS rebinding protection,
-redirect refusal, and concurrency-sensitive behavior.
+redirect refusal, correlated OpenTelemetry trace links, structured-log privacy,
+and concurrency-sensitive behavior.
 
 ## Development Notes
 

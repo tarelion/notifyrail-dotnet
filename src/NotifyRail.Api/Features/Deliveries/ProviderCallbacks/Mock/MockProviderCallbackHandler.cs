@@ -30,24 +30,19 @@ public sealed class MockProviderCallbackHandler(
                 delivery.Recipient,
             })
             .SingleOrDefaultAsync(cancellationToken);
+        var correlation = source is null
+            ? null
+            : new TelemetryCorrelation(
+                source.ApiClientId,
+                source.MessageId,
+                source.DeliveryId,
+                source.SourceTraceParent);
         using var activity = NotifyRailTelemetry.StartLinkedActivity(
             NotifyRailTelemetry.ProviderCallbackActivity,
             ActivityKind.Consumer,
-            source?.SourceTraceParent);
-        activity?.SetTag(
-            NotifyRailTelemetry.ApiClientIdTag,
-            source?.ApiClientId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.MessageIdTag,
-            source?.MessageId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.DeliveryIdTag,
-            source?.DeliveryId.ToString());
-        activity?.SetTag(
-            NotifyRailTelemetry.RecipientTag,
-            source is null
-                ? null
-                : NotifyRailTelemetry.MaskRecipient(source.Recipient));
+            correlation,
+            source?.Recipient,
+            preserveCurrentParent: true);
         activity?.SetTag(NotifyRailTelemetry.OutcomeTag, status);
 
         await using var transaction = await dbContext.Database

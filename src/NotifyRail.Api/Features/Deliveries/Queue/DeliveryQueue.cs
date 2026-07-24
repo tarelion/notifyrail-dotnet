@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using NotifyRail.Api.Features.Webhooks.Outbox;
 using NotifyRail.Api.Infrastructure.Persistence;
+using NotifyRail.Api.Telemetry;
 
 namespace NotifyRail.Api.Features.Deliveries.Queue;
 
@@ -339,9 +340,11 @@ public sealed class DeliveryQueue
                 row.SenderTitle,
                 row.Body,
                 attemptNumber),
-            row.ApiClientId,
-            row.MessageId,
-            row.SourceTraceParent);
+            new TelemetryCorrelation(
+                row.ApiClientId,
+                row.MessageId,
+                row.DeliveryId,
+                row.SourceTraceParent));
     }
 
     private static string ToDatabaseValue(ProviderOutcome outcome)
