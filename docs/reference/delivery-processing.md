@@ -34,6 +34,9 @@ Both components use the configured `ConnectionStrings:Postgres`. The hosted
 worker opens a DI scope for each batch so scoped dependencies such as
 `NotifyRailDbContext` are not shared across polls.
 
+The asynchronous trace and structured-log contract is defined separately in
+the [observability reference](observability.md).
+
 ### Configuration
 
 | Setting | Source | Default | Contract |

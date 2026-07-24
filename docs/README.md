@@ -30,6 +30,9 @@ current implementation and local workflow.
   tables, relationships, constraints, and indexes.
 - [OTP verification](reference/otp-verification.md): challenge lifecycle,
   configuration, hashing, idempotency, and verification rules.
+- [Observability](reference/observability.md): OpenTelemetry activation,
+  asynchronous trace links, structured correlation fields, and privacy
+  invariants.
 
 ## Architecture Decisions
 

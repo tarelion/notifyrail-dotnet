@@ -142,6 +142,7 @@ accepted.
 | `sequence` | `integer` | yes | Positive, monotonic sequence within one Delivery. |
 | `occurred_at` | `timestamp with time zone` | yes | Delivery transition instant. |
 | `payload` | `text` | yes | Exact serialized JSON body used for signing and dispatch. |
+| `source_trace_parent` | `text` | no | W3C context of the Webhook Event creation or most recent replay activity; used only to link a later asynchronous dispatch trace. |
 | `status` | `text` | yes | One of `pending`, `processing`, `retry_scheduled`, `succeeded`, or `dead`. |
 | `attempt_count` | `integer` | yes | Number of recorded Webhook Attempts; defaults to zero. |
 | `next_attempt_at` | `timestamp with time zone` | no | Required exactly while `retry_scheduled`; earliest time the event may be claimed again. |
@@ -224,6 +225,7 @@ Indexes and uniqueness:
 | `claimed_by` | `text` | no | Non-blank worker identity required only while status is `processing`. |
 | `provider_message_id` | `text` | no | Must not be blank when present; unique across non-null values. |
 | `expires_at` | `timestamp with time zone` | no | Delivery expires when this time is reached. Generic message intake leaves it null; OTP send sets it to the challenge expiry. |
+| `source_trace_parent` | `text` | no | W3C context captured at Message or OTP intake and used only to link later asynchronous Delivery processing and Provider Callback traces. |
 | `created_at` | `timestamp with time zone` | yes | Defaults to `now()`. |
 | `updated_at` | `timestamp with time zone` | yes | Defaults to `now()`. |
 

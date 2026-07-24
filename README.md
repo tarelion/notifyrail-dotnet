@@ -54,6 +54,7 @@ vhs scripts/demo-flow.tape
 | Attempt history | Every provider send attempt is persisted and exposed through the API. |
 | Provider callbacks | Mock callbacks safely finalize `sent` deliveries without regressing terminal states. |
 | Client webhooks | Client-visible `sent`, `delivered`, `failed`, and `expired` transitions atomically create ordered Webhook Events; a separate PostgreSQL-backed worker sends exact signed payloads, records each attempt, retries transient failures within a configurable 24-hour window, retains exhausted events as Dead Webhook Events, and blocks SSRF through public-address validation at configuration and connection time. |
+| Observability | OpenTelemetry traces and structured logs correlate Message intake, Delivery processing, Provider Callbacks, Webhook Event creation, dispatch, retry, death, and replay across persisted boundaries without exposing full recipients, client content, credentials, signatures, or remote response bodies. |
 | OTP | OTP send is idempotent; verification is hashed, TTL-bound, one-time, and concurrency-safe. |
 | Reporting | Message summary and report endpoints expose aggregate delivery status counts. |
 
@@ -76,6 +77,7 @@ retryable, and permanent failure paths easy to demonstrate.
 | Queue | PostgreSQL row locking with `FOR UPDATE SKIP LOCKED` |
 | Background work | ASP.NET Core hosted service |
 | Tests | xUnit integration and unit tests |
+| Observability | OpenTelemetry with optional OTLP/gRPC export |
 | Local runtime | Docker Compose for the API, migration job, and PostgreSQL |
 
 ## Current API Surface
@@ -248,6 +250,12 @@ development and test environments.
 Attempts continue after an event first becomes eligible for dispatch and
 defaults to `1.00:00:00` (24 hours).
 
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` to an absolute OTLP/gRPC base URI to export
+traces and structured logs. Leaving it unset registers no OpenTelemetry
+provider or exporter. See the
+[observability reference](docs/reference/observability.md) for activity names,
+correlation fields, and privacy rules.
+
 For host-based development, start only PostgreSQL, apply migrations, and run
 the API with the .NET SDK:
 
@@ -296,6 +304,7 @@ docker compose down -v
 | `src/NotifyRail.Api/Features/Deliveries` | Delivery persistence, queue claiming, provider adapter, callbacks, and worker |
 | `src/NotifyRail.Api/Features/Otp` | OTP send, hashing, challenge persistence, and verification |
 | `src/NotifyRail.Api/Features/Webhooks` | Webhook Endpoint and Dead Webhook Event management, transactional outbox, signed dispatch, queue claiming, and worker processing |
+| `src/NotifyRail.Api/Telemetry` | OpenTelemetry registration, activity/link contracts, correlation attributes, and recipient masking |
 | `src/NotifyRail.Api/Infrastructure/Persistence` | EF Core DbContext and migrations |
 | `tests/NotifyRail.Api.Tests` | xUnit integration and unit tests |
 | `docs/reference` | Canonical implemented contracts |
@@ -318,6 +327,9 @@ Start with [docs/README.md](docs/README.md).
   constraints, relationships, and indexes.
 - [OTP verification reference](docs/reference/otp-verification.md): OTP
   challenge lifecycle, hashing, TTL, attempts, and verification rules.
+- [Observability reference](docs/reference/observability.md): OTLP activation,
+  asynchronous trace links, structured correlation attributes, and privacy
+  invariants.
 
 ## Status
 
