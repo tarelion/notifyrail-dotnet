@@ -35,9 +35,11 @@ using NotifyRail.Api.Features.Webhooks.RotateWebhookSecret;
 using NotifyRail.Api.Features.Webhooks.Secrets;
 using NotifyRail.Api.Features.Webhooks.Worker;
 using NotifyRail.Api.Infrastructure.Persistence;
+using NotifyRail.Api.Telemetry;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.AddNotifyRailTelemetry();
 builder.Services.AddNotifyRailHealth(builder.Configuration);
 builder.Services.AddNotifyRailAuthentication();
 

@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NotifyRail.Api.Features.Deliveries.Persistence;
 using NotifyRail.Api.Features.Messages.Persistence;
 using NotifyRail.Api.Infrastructure.Persistence;
+using NotifyRail.Api.Telemetry;
 
 namespace NotifyRail.Api.Features.Messages.CreateMessage;
 
@@ -23,6 +25,16 @@ public sealed class MessageIntake
         CreateMessageCommand command,
         CancellationToken cancellationToken)
     {
+        using var activity = NotifyRailTelemetry.ActivitySource.StartActivity(
+            NotifyRailTelemetry.MessageIntakeActivity,
+            ActivityKind.Producer);
+        activity?.SetTag(NotifyRailTelemetry.ApiClientIdTag, apiClientId.ToString());
+        activity?.SetTag(
+            NotifyRailTelemetry.RecipientTag,
+            string.Join(
+                ',',
+                command.Recipients.Select(NotifyRailTelemetry.MaskRecipient)));
+
         var createdAt = PostgresTimestamp.Normalize(DateTimeOffset.UtcNow);
         var scheduledAt = command.ScheduledAt is null
             ? (DateTimeOffset?)null
@@ -43,6 +55,8 @@ public sealed class MessageIntake
         var deliveries = command.Recipients
             .Select(recipient => Delivery.Create(message.Id, recipient, createdAt))
             .ToArray();
+        activity?.SetTag(NotifyRailTelemetry.MessageIdTag, message.Id.ToString());
+        activity?.SetTag(NotifyRailTelemetry.DeliveryCountTag, deliveries.Length);
 
         await using var transaction =
             await _dbContext.Database.BeginTransactionAsync(cancellationToken);
